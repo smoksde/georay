@@ -48,6 +48,12 @@ scripts/fetch_dem.py --origin 52.5163,13.3777 --extent 2000
 scripts/fetch_map.py --origin 52.5163,13.3777 --extent 2000 --out data/berlin.map
 ```
 
+![georay over Berlin](docs/screenshot-berlin.png)
+
+*`--scene berlin`: SRTM elevation with an OpenStreetMap basemap draped over it,
+orbiting the Brandenburg Gate at 400 m. The inset is what the UAV camera sees;
+clicking a pixel in it gives the coordinate at the bottom left.*
+
 Without a scene you get synthetic terrain, which needs no files:
 
 ```bash

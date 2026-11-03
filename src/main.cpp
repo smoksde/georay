@@ -153,9 +153,14 @@ int main(int argc, char** argv) {
     // and nothing on screen tells you real data is even possible. Say so once,
     // here, where someone who has just built it will see it.
     if (options.dem_directory.empty() && options.map_path.empty()) {
+        // Flushed explicitly: stdout is fully buffered when piped, and this
+        // is precisely the line someone who has just built the thing needs
+        // to see - losing it to a buffer when the window is closed would
+        // defeat the point of printing it.
         std::cout << "georay: synthetic terrain. For real terrain and maps try "
                      "--scene berlin\n"
-                     "        (or --help; scenes/ lists what is available).\n";
+                     "        (or --help; scenes/ lists what is available).\n"
+                  << std::flush;
     }
 
     georay::App app;
