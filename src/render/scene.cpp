@@ -1,5 +1,6 @@
 #include "render/scene.hpp"
 
+#include <algorithm>
 #include <cmath>
 
 namespace georay {
@@ -10,7 +11,10 @@ glm::vec3 toFloat(const glm::dvec3& v) { return glm::vec3(float(v.x), float(v.y)
 }  // namespace
 
 Scene::Scene() = default;
-Scene::~Scene() = default;
+
+Scene::~Scene() {
+    if (map_texture_ != 0) glDeleteTextures(1, &map_texture_);
+}
 
 bool Scene::initialise() {
     terrain_shader_ = std::make_unique<Shader>(shaderPath("terrain.vert"),
@@ -29,7 +33,45 @@ bool Scene::initialise() {
     return true;
 }
 
-void Scene::buildTerrain(const Terrain& terrain) {
+void Scene::setMapRaster(const MapRaster& map) {
+    if (!map.valid()) return;
+    if (map_texture_ == 0) glGenTextures(1, &map_texture_);
+
+    glBindTexture(GL_TEXTURE_2D, map_texture_);
+    glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB8, map.width(), map.height(), 0, GL_RGB,
+                 GL_UNSIGNED_BYTE, map.pixels().data());
+    // Mipmaps matter here, not as polish: the raster is thousands of pixels
+    // across and the 3D view shows the whole thing at once, so without them
+    // the minified map is a shimmering mess of aliased street lines.
+    glGenerateMipmap(GL_TEXTURE_2D);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    // Clamp rather than repeat: a tiled map would put a second Berlin next to
+    // the first, which is worse than an honest edge.
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+
+    // Anisotropic filtering if the driver has it. The terrain is usually seen
+    // at a shallow angle, which is exactly the case trilinear filtering blurs
+    // into uselessness - and a blurred map cannot be read.
+    if (GLEW_EXT_texture_filter_anisotropic) {
+        GLfloat max_anisotropy = 1.0f;
+        glGetFloatv(GL_MAX_TEXTURE_MAX_ANISOTROPY_EXT, &max_anisotropy);
+        glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_MAX_ANISOTROPY_EXT,
+                        std::min(max_anisotropy, 8.0f));
+    }
+    glBindTexture(GL_TEXTURE_2D, 0);
+}
+
+void Scene::clearMapRaster() {
+    if (map_texture_ != 0) {
+        glDeleteTextures(1, &map_texture_);
+        map_texture_ = 0;
+    }
+}
+
+void Scene::buildTerrain(const Terrain& terrain, const EnuFrame& frame, const MapRaster* map) {
     const int n = terrain.resolution();
 
     std::vector<SurfaceVertex> vertices;
@@ -44,7 +86,18 @@ void Scene::buildTerrain(const Terrain& terrain) {
             // would make the render disagree with the maths exactly where
             // the relief is steepest - which is where it matters.
             const glm::dvec3 nrm = terrain.sampleNormal(p.x, p.y);
-            vertices.push_back({glm::vec3(float(p.x), float(p.y), float(h)), toFloat(nrm)});
+
+            glm::vec2 uv(0.0f);
+            if (map && map->valid()) {
+                // The post's own position on the ellipsoid, through the full
+                // Web Mercator transform. Doing it here, once per post, is
+                // what keeps the map registered to the ground to within a
+                // pixel across the whole scene.
+                const Geodetic here = frame.toGeodetic(glm::dvec3(p.x, p.y, h));
+                const glm::dvec2 map_uv = map->uvFor(here.latitude_deg, here.longitude_deg);
+                uv = glm::vec2(float(map_uv.x), float(map_uv.y));
+            }
+            vertices.push_back({glm::vec3(float(p.x), float(p.y), float(h)), toFloat(nrm), uv});
         }
     }
 
@@ -67,7 +120,7 @@ void Scene::buildTerrain(const Terrain& terrain) {
 }
 
 void Scene::beginWorld(const glm::mat4& view_projection, const glm::vec3& eye,
-                       const Terrain& terrain, float contour_interval_m) {
+                       const Terrain& terrain, float contour_interval_m, bool show_map) {
     terrain_shader_->bind();
     terrain_shader_->set("u_view_projection", view_projection);
     terrain_shader_->set("u_camera_position", eye);
@@ -78,6 +131,14 @@ void Scene::beginWorld(const glm::mat4& view_projection, const glm::vec3& eye,
     terrain_shader_->set("u_height_min", float(terrain.minHeight()));
     terrain_shader_->set("u_height_max", float(terrain.maxHeight() + 1.0));
     terrain_shader_->set("u_contour_interval", contour_interval_m);
+
+    const bool mapped = show_map && map_texture_ != 0;
+    terrain_shader_->set("u_has_map", mapped ? 1 : 0);
+    if (mapped) {
+        glActiveTexture(GL_TEXTURE0);
+        glBindTexture(GL_TEXTURE_2D, map_texture_);
+        terrain_shader_->set("u_map", 0);
+    }
 
     pending_view_projection_ = view_projection;
 }

@@ -1,0 +1,18 @@
+# georay scene: the Zugspitze massif, where terrain actually matters.
+#
+# 2 km of relief inside a 6 km box, which is the case that makes the whole
+# tool worth having: the flat-earth error on a picked pixel is around 60 m
+# here, against 4 m over the Munich plain. Press X to see the comparison.
+#
+#   scripts/fetch_dem.py --origin 47.435,10.99 --extent 3000
+
+name              ZUGSPITZE MASSIF
+origin            47.435,10.99
+extent            3000
+dem               data/dem
+geoid-separation  48.0
+
+pattern           orbit
+radius            520
+height-agl        220
+speed             20

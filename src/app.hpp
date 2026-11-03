@@ -21,6 +21,7 @@
 #include "geo/camera_model.hpp"
 #include "geo/dem.hpp"
 #include "geo/geoid.hpp"
+#include "geo/maptile.hpp"
 #include "geo/geolocate.hpp"
 #include "geo/pose.hpp"
 #include "geo/terrain.hpp"
@@ -52,9 +53,25 @@ public:
         double geoid_separation_m = 0.0;
         bool geoid_separation_given = false;
 
+        // A map raster from scripts/fetch_map.py, draped over the terrain.
+        std::string map_path;
+
         double origin_latitude_deg = 48.137554;
         double origin_longitude_deg = 11.575497;
         double half_extent_m = 3000.0;
+
+        // Initial flight, so a scene preset can describe a sortie rather than
+        // just a patch of ground.
+        std::string scene_name;
+        std::string flight_pattern = "orbit";
+        double orbit_radius_m = 520.0;
+        double height_agl_m = 220.0;
+        double speed_mps = 20.0;
+
+        // Reads a scenes/*.scene file into these fields. Command-line flags
+        // given after --scene still win, so a preset is a starting point
+        // rather than a straitjacket.
+        static bool loadScene(const std::string& path, Options& options, std::string& error);
     };
 
     App();
@@ -137,6 +154,7 @@ private:
     // would stall the frame.
     std::unique_ptr<DemSource> dem_;
     GeoidModel geoid_;
+    MapRaster map_;
     Terrain::DemLoadReport dem_report_;
     bool using_dem_ = false;
     // A flat ground model at the frame origin's elevation, used only to
@@ -178,6 +196,7 @@ private:
     bool show_contours_ = true;
     bool show_flat_comparison_ = true;
     bool large_inset_ = false;
+    bool show_map_ = true;
     bool follow_aircraft_ = true;
     bool dragging_orbit_ = false;
     bool dragging_pan_ = false;

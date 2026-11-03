@@ -1,0 +1,30 @@
+# georay scene: central Berlin, orbiting the Brandenburg Gate.
+#
+# Berlin is 36-40 m above sea level and essentially flat, so elevation data
+# alone shows you nothing here. The map raster is what makes the scene worth
+# flying: the simulated camera looks at real streets, and a geolocated pixel
+# can be checked against a place you can name.
+#
+# Fetch the data first:
+#   scripts/fetch_dem.py --origin 52.5163,13.3777 --extent 2000
+#   scripts/fetch_map.py --origin 52.5163,13.3777 --extent 2000 --zoom 16 \
+#       --out data/berlin.map
+
+name              BERLIN - BRANDENBURG GATE
+origin            52.5163,13.3777
+extent            2000
+
+dem               data/dem
+map               data/berlin.map
+
+# EGM96 separation for northern Germany, to about a metre. Without it every
+# reported elevation is off by this much - see README.
+geoid-separation  39.5
+
+# A survey orbit around the gate. 400 m is high for a hobby drone and about
+# right here: the map is 1.45 m per pixel, so a lower, tighter footprint just
+# magnifies map pixels rather than showing more detail.
+pattern           orbit
+radius            800
+height-agl        400
+speed             22

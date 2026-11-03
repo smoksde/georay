@@ -1,0 +1,18 @@
+# georay scene: Munich, a flat gravel plain with about 30 m of relief.
+#
+# The undramatic case, and worth having for exactly that reason: the
+# flat-earth error here is a few metres, which is the honest result over
+# ground like this.
+#
+#   scripts/fetch_dem.py --origin 48.1375,11.5755 --extent 3000
+
+name              MUNICH
+origin            48.1375,11.5755
+extent            3000
+dem               data/dem
+geoid-separation  47.0
+
+pattern           orbit
+radius            520
+height-agl        220
+speed             20

@@ -23,8 +23,11 @@ void printUsage() {
         "  georay --size WxH             window size (default 1600x900)\n"
         "\n"
         "Scene:\n"
+        "  --scene NAME                  load scenes/NAME.scene (try: berlin, munich,\n"
+        "                                zugspitze). Flags after it override its settings.\n"
         "  --origin LAT,LON              scene centre (default 48.137554,11.575497)\n"
         "  --extent METRES               half-extent of the terrain (default 3000)\n"
+        "  --map FILE                    map raster from scripts/fetch_map.py\n"
         "\n"
         "Real elevation data (optional; synthetic terrain is used without it):\n"
         "  --dem DIR                     directory of SRTM .hgt tiles\n"
@@ -35,8 +38,11 @@ void printUsage() {
         "  --geoid FILE                  a geoid grid from scripts/fetch_dem.py, instead\n"
         "                                of a single separation\n"
         "\n"
-        "Fetch tiles with:\n"
-        "  scripts/fetch_dem.py --origin 48.1375,11.5755 --extent 3000\n"
+        "Fetch data for a scene with:\n"
+        "  scripts/fetch_dem.py --origin 52.5163,13.3777 --extent 2000\n"
+        "  scripts/fetch_map.py --origin 52.5163,13.3777 --extent 2000 "
+        "--out data/berlin.map\n"
+        "  ./build/georay --scene berlin\n"
         "\n"
         "  georay --help                 this message\n";
 }
@@ -69,6 +75,25 @@ int main(int argc, char** argv) {
         }
         if (arg == "--screenshot" && i + 1 < argc) {
             options.screenshot_path = argv[++i];
+            continue;
+        }
+        if (arg == "--scene" && i + 1 < argc) {
+            // Resolved relative to the project's scenes/ directory, which is
+            // baked in at build time for the same reason the shaders are: a
+            // build directory anywhere still finds them.
+            const std::string name = argv[++i];
+            const std::string path = name.find('/') != std::string::npos
+                                         ? name
+                                         : std::string(GEORAY_SCENE_DIR) + "/" + name + ".scene";
+            std::string error;
+            if (!georay::App::Options::loadScene(path, options, error)) {
+                std::cerr << "georay: " << error << "\n";
+                return 2;
+            }
+            continue;
+        }
+        if (arg == "--map" && i + 1 < argc) {
+            options.map_path = argv[++i];
             continue;
         }
         if (arg == "--dem" && i + 1 < argc) {
@@ -122,6 +147,15 @@ int main(int argc, char** argv) {
         std::cerr << "georay: unknown argument '" << arg << "'\n\n";
         printUsage();
         return 2;
+    }
+
+    // The complaint this answers: running georay bare shows synthetic terrain,
+    // and nothing on screen tells you real data is even possible. Say so once,
+    // here, where someone who has just built it will see it.
+    if (options.dem_directory.empty() && options.map_path.empty()) {
+        std::cout << "georay: synthetic terrain. For real terrain and maps try "
+                     "--scene berlin\n"
+                     "        (or --help; scenes/ lists what is available).\n";
     }
 
     georay::App app;

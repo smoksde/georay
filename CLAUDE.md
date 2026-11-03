@@ -29,9 +29,15 @@ is what lets `--selftest` run offline, keeps the binary free of libcurl and
 TLS, and keeps bulk downloading an explicit act rather than something a render
 loop does on someone's behalf.
 
-Messy third-party formats (geoid PGMs, and GeoTIFF if it is ever added) are
-parsed in Python at fetch time and written out as simple arrays. The C++ side
-reads one trivially parseable format and never learns about the others.
+Messy third-party formats (PNG map tiles, geoid PGMs, and GeoTIFF if it is
+ever added) are parsed in Python at fetch time and written out as simple
+arrays. The C++ side reads a handful of trivially parseable formats and never
+learns about the others - which is also why georay needs no image decoder.
+
+Tile servers have usage policies. fetch_map.py identifies itself, rate-limits,
+caches per tile and refuses bulk runs; keep it that way, and keep the
+attribution travelling inside the raster so georay displays whatever the
+source requires.
 
 ## Height systems
 
@@ -40,6 +46,10 @@ Three different heights are in play and mixing them is silent:
 - `Geodetic::altitude_m` - above the WGS84 ellipsoid. What GPS reports.
 - DEM heights - above the geoid. What a map calls "metres above sea level".
 - `Terrain` heights - ENU, i.e. relative to the frame origin's altitude.
+
+And one horizontal projection: map rasters are Web Mercator, not latitude and
+longitude. `MapRaster::uvFor` owns that transform and must stay identical to
+the one fetch_map.py lays the raster out with.
 
 `Terrain::loadFromDem` is the one place all three meet. Before changing it,
 read the header comments in `geo/geoid.hpp` and `geo/terrain.hpp`. A plain

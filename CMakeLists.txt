@@ -90,6 +90,7 @@ add_library(georay_geo STATIC
     src/geo/camera_model.cpp
     src/geo/dem.cpp
     src/geo/geoid.cpp
+    src/geo/maptile.cpp
     src/geo/pose.cpp
     src/geo/terrain.cpp
     src/geo/geolocate.cpp
@@ -118,7 +119,8 @@ target_link_libraries(georay
 # Shaders are read at runtime relative to this, so a build directory anywhere
 # still finds them.
 target_compile_definitions(georay PRIVATE
-    GEORAY_SHADER_DIR="${CMAKE_CURRENT_SOURCE_DIR}/shaders")
+    GEORAY_SHADER_DIR="${CMAKE_CURRENT_SOURCE_DIR}/shaders"
+    GEORAY_SCENE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/scenes")
 
 if(WIN32)
     target_link_libraries(georay PRIVATE SDL2main)

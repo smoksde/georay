@@ -19,6 +19,7 @@
 
 #include "geo/dem.hpp"
 #include "geo/geoid.hpp"
+#include "geo/maptile.hpp"
 #include "geo/geolocate.hpp"
 
 namespace georay {
@@ -788,6 +789,128 @@ void testGeoid() {
               "orthometric height plus separation is ellipsoidal height");
 }
 
+// Writes a georay map raster with a known pixel pattern.
+std::string writeTestMap(const std::string& directory, int zoom, int tile_x, int tile_y,
+                         int tiles_x, int tiles_y, const std::string& attribution) {
+    const std::string path = directory + "/test.map";
+    const int width = tiles_x * 4, height = tiles_y * 4;  // 4 px per tile, enough to index
+    std::ofstream file(path, std::ios::binary);
+    file.write("GEORAYM1", 8);
+    const int32_t header[7] = {zoom, tile_x, tile_y, tiles_x, tiles_y, width, height};
+    file.write(reinterpret_cast<const char*>(header), sizeof(header));
+    std::vector<char> attribution_field(128, '\0');
+    std::memcpy(attribution_field.data(), attribution.c_str(),
+                std::min(attribution.size(), size_t(127)));
+    file.write(attribution_field.data(), 128);
+    for (int i = 0; i < width * height; ++i) {
+        const unsigned char rgb[3] = {(unsigned char)(i & 0xFF), 0x40, 0x80};
+        file.write(reinterpret_cast<const char*>(rgb), 3);
+    }
+    return path;
+}
+
+void testMapRaster() {
+    std::printf("map raster and web mercator\n");
+
+    const std::string directory = makeTempDir();
+    check(!directory.empty(), "temporary directory for the map tests");
+    if (directory.empty()) return;
+
+    // A whole-world raster at zoom 1, so the projection's own identities can
+    // be checked rather than some arbitrary crop of it.
+    {
+        const std::string path = writeTestMap(directory, 1, 0, 0, 2, 2, "(C) TEST");
+        MapRaster map;
+        std::string error;
+        check(MapRaster::load(path, map, error), "load a map raster: " + error);
+        check(map.valid(), "a loaded raster is valid");
+        check(map.zoom() == 1, "zoom survives the round trip");
+        check(map.width() == 8 && map.height() == 8, "dimensions survive the round trip");
+        check(map.attribution() == "(C) TEST",
+              "the attribution travels inside the raster, not beside it");
+
+        // Longitude is linear in Web Mercator, and these are exact.
+        checkNear(map.uvFor(0.0, -180.0).x, 0.0, 1e-12, "longitude -180 is the western edge");
+        checkNear(map.uvFor(0.0, 0.0).x, 0.5, 1e-12, "the prime meridian is halfway across");
+        checkNear(map.uvFor(0.0, 180.0).x, 1.0, 1e-12, "longitude 180 is the eastern edge");
+        // Latitude is not, but the equator is still the midpoint by symmetry.
+        checkNear(map.uvFor(0.0, 0.0).y, 0.5, 1e-12, "the equator is halfway down");
+
+        // y(lat) + y(-lat) must equal the full height: the projection is
+        // symmetric about the equator even though it is not linear.
+        for (double lat : {10.0, 33.3, 52.5, 70.0, 84.0}) {
+            checkNear(map.uvFor(lat, 0.0).y + map.uvFor(-lat, 0.0).y, 1.0, 1e-12,
+                      "mercator is symmetric about the equator");
+        }
+        // Northern latitudes are in the upper half, which pins the sign.
+        check(map.uvFor(52.5, 0.0).y < 0.5, "northern latitudes are above the midpoint");
+        check(map.uvFor(-52.5, 0.0).y > 0.5, "southern latitudes are below it");
+
+        // THE point of doing Mercator properly: v is not linear in latitude.
+        // At 45 degrees the linear answer would be 0.25, and Mercator gives
+        // about 0.18 - a difference of a fifteenth of the whole world.
+        const double linear_guess = 0.5 - 45.0 / 180.0;
+        check(std::fabs(map.uvFor(45.0, 0.0).y - linear_guess) > 0.05,
+              "latitude is NOT linear in v - interpolating it would be wrong");
+
+        check(map.covers(0.0, 0.0), "the world raster covers the origin");
+        check(!map.covers(0.0, 200.0), "an impossible longitude is not covered");
+    }
+
+    // A crop at a realistic zoom, matching what fetch_map.py produces for the
+    // Berlin scene. Its own edges must map to exactly 0 and 1, which is the
+    // check that the tile offsets are applied the right way round.
+    {
+        const int zoom = 16, tile_x = 35197, tile_y = 21488, tiles_x = 12, tiles_y = 12;
+        const std::string path =
+            writeTestMap(directory, zoom, tile_x, tile_y, tiles_x, tiles_y, "(C) TEST");
+        MapRaster map;
+        std::string error;
+        check(MapRaster::load(path, map, error), "load the cropped raster");
+
+        checkNear(map.uvFor(map.northEdge(), map.westEdge()).x, 0.0, 1e-9,
+                  "the west edge is u = 0");
+        checkNear(map.uvFor(map.northEdge(), map.westEdge()).y, 0.0, 1e-9,
+                  "the north edge is v = 0");
+        checkNear(map.uvFor(map.southEdge(), map.eastEdge()).x, 1.0, 1e-9,
+                  "the east edge is u = 1");
+        checkNear(map.uvFor(map.southEdge(), map.eastEdge()).y, 1.0, 1e-9,
+                  "the south edge is v = 1");
+        check(map.northEdge() > map.southEdge(), "north is north of south");
+        check(map.eastEdge() > map.westEdge(), "east is east of west");
+
+        // Berlin sits inside this crop, and near its middle.
+        check(map.covers(52.5163, 13.3777), "the Berlin crop covers the Brandenburg Gate");
+        const glm::dvec2 uv = map.uvFor(52.5163, 13.3777);
+        check(uv.x > 0.3 && uv.x < 0.7 && uv.y > 0.3 && uv.y < 0.7,
+              "...and puts it near the middle, not at an edge");
+
+        // Ground resolution at zoom 16 and this latitude: about 1.45 m. A
+        // wrong power of two here would be off by a factor of two and is
+        // otherwise easy not to notice.
+        checkNear(map.metresPerPixel(52.5163), 1.4536, 1e-3,
+                  "ground resolution at zoom 16 in Berlin");
+        checkNear(map.metresPerPixel(0.0), map.metresPerPixel(52.5163) /
+                                               std::cos(deg2rad(52.5163)),
+                  1e-6, "resolution scales with 1/cos(latitude)");
+    }
+
+    // Corrupt input must be refused rather than read as a raster of garbage.
+    {
+        const std::string path = directory + "/bad.map";
+        {
+            std::ofstream bad(path, std::ios::binary);
+            bad << "NOTAMAP!";
+        }
+        MapRaster map;
+        std::string error;
+        check(!MapRaster::load(path, map, error), "a file with the wrong magic is refused");
+        check(!error.empty(), "...and says why");
+        check(!MapRaster::load(directory + "/does_not_exist.map", map, error),
+              "a missing file is refused");
+    }
+}
+
 // Loading real elevation data end to end: DEM posts in, ENU heights out.
 //
 // The hard part to verify is that this cannot be checked by re-running the
@@ -1064,6 +1187,7 @@ int runSelfTest() {
     testHgtTile();
     testGeoid();
     testDemTerrain();
+    testMapRaster();
 
     std::printf("\n%d checks, %d failures\n", g_checks, g_failures);
     return g_failures == 0 ? 0 : 1;

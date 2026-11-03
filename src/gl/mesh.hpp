@@ -21,6 +21,13 @@ namespace georay {
 struct SurfaceVertex {
     glm::vec3 position;
     glm::vec3 normal;
+    // Map raster coordinates, computed per post from the post's own latitude
+    // and longitude. Per-vertex rather than derived in the shader from the
+    // world position, because the map is in Web Mercator and the world is in
+    // a local tangent plane - the relation between them is not linear, and
+    // approximating it in the fragment shader would slide the map off the
+    // ground by a metre or so across the scene.
+    glm::vec2 map_uv{0.0f};
 };
 
 class SurfaceMesh {

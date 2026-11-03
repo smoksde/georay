@@ -33,6 +33,24 @@ sudo apt install build-essential cmake libsdl2-dev libglew-dev libglm-dev
 ## Running
 
 ```bash
+./build/georay --scene berlin
+```
+
+That flies a survey orbit over the Brandenburg Gate on real elevation data
+with an OpenStreetMap basemap draped over it — click anywhere in the camera
+view and you get a coordinate you can check on a real map. `scenes/` also has
+`munich` and `zugspitze`. Fetch a scene's data once before first use:
+
+```bash
+scripts/fetch_dem.py --origin 52.5163,13.3777 --extent 2000
+```
+```bash
+scripts/fetch_map.py --origin 52.5163,13.3777 --extent 2000 --out data/berlin.map
+```
+
+Without a scene you get synthetic terrain, which needs no files:
+
+```bash
 ./build/georay
 ```
 
@@ -43,7 +61,50 @@ Other modes:
 | `./build/georay --selftest` | Runs the numeric verification suite and exits. No window, no GL — works headless. |
 | `./build/georay --screenshot out.bmp` | Renders a few frames, saves a BMP, exits. |
 | `./build/georay --size 1920x1080` | Window size. |
+| `./build/georay --scene NAME` | Load `scenes/NAME.scene`. Later flags override it. |
 | `./build/georay --origin LAT,LON --extent M` | Where the scene is, and how big. |
+
+## Real maps
+
+A map raster draped over the terrain is what makes a flat city worth flying.
+Berlin is 36–40 m above sea level and essentially level, so elevation data
+alone shows you nothing there; with the basemap, the simulated camera looks at
+real streets and a geolocated pixel can be checked against a place you can
+name.
+
+```bash
+scripts/fetch_map.py --origin 52.5163,13.3777 --extent 2000 --zoom 16 --out data/berlin.map
+```
+
+Tiles come from OpenStreetMap by default. Their servers are a donated resource
+with a [usage policy](https://operations.osmfoundation.org/policies/tiles/):
+identify yourself, don't bulk download, cache what you fetch, and credit the
+project. The script does all four — real User-Agent, rate limited, per-tile
+cache, and it refuses runs over `--max-tiles` (250, OSM's bulk threshold). The
+attribution string travels *inside* the raster so georay displays it whenever
+the map is on screen. `--url` points it at any XYZ service you are licensed to
+use; aerial imagery makes the camera view look like a real UAV feed, but
+essentially every imagery provider wants an account and their own terms.
+
+**Web Mercator is handled properly, not approximated.** Map tiles are not in
+latitude and longitude — their y axis is the Mercator projection, which is
+distinctly non-linear in latitude. Treating it as linear would slide the map
+off the ground by over a metre across a 4 km scene: small enough to look fine,
+large enough to matter for a tool that reports positions in metres. georay
+applies the same forward transform the fetch script laid the raster out with,
+once per terrain post.
+
+### Verified against real landmarks
+
+Three independently-known Berlin coordinates were projected through the full
+chain — pose, intrinsics, projection, Mercator UV, render — and checked against
+where they land in the rendered camera view:
+
+| Landmark | Projected to |
+| --- | --- |
+| Brandenburg Gate (52.51628, 13.37771) | the gate monument at the head of Pariser Platz |
+| Holocaust Memorial (52.51390, 13.37859) | its stelae grid |
+| Reichstag (52.51864, 13.37612) | the Reichstag building |
 
 ## Real elevation data
 
@@ -160,7 +221,7 @@ continental distances.
 | `1` `2` `3` `4` | Synthetic terrain: flat, hills, valley, mountains |
 | `0` | Back to the real DEM terrain, if loaded |
 | `[` `]`, `,` `.`, `-` `=`, `;` `'` | Camera zoom, height AGL, ground speed, orbit radius |
-| `D`, `F`, `C`, `X`, `V` | Lens distortion, footprint, contours, flat-earth error, inset size |
+| `D`, `F`, `C`, `X`, `V`, `M` | Lens distortion, footprint, contours, flat-earth error, inset size, map |
 | `R`, `F12`, `H`, `Q` | Reset, screenshot, help, quit |
 
 ## How the geolocation works
@@ -260,6 +321,11 @@ These are deliberate, and each is where a production pipeline would differ.
   vertical accuracy, and over forest and cities it measures the canopy and
   rooftops rather than the ground. A photogrammetry pipeline that cared would
   use a modern lidar DTM where one exists.
+- **The basemap is a map, not imagery.** At zoom 16 it is 1.45 m per pixel,
+  while the camera's own GSD at 400 m is about 44 cm — so flying lower
+  magnifies map pixels rather than resolving more ground. The HUD shows both
+  numbers so the limit is visible. Pointing `--url` at an aerial imagery
+  service you are licensed for fixes this.
 - **Only SRTM `.hgt` is read.** Copernicus GLO-30 and most national products
   ship as GeoTIFF, which needs a TIFF reader this deliberately does not have.
   The conversion would belong in `scripts/fetch_dem.py`, where the messy
@@ -270,11 +336,13 @@ These are deliberate, and each is where a production pipeline would differ.
 ## Layout
 
 ```
-src/geo/      the geolocation maths, and the DEM/geoid readers - no GL
+src/geo/      the geolocation maths, and the DEM/geoid/map readers - no GL
               anywhere in it, and a separate CMake target so it stays that way
 src/gl/       thin OpenGL wrappers: shaders, buffers, an embedded bitmap font
 src/render/   terrain mesh, 3D overlays, the orbit camera
 src/          the application: window, input, HUD, flight simulation, selftest
 shaders/      GLSL
-scripts/      fetch_dem.py - the only thing here that touches the network
+scenes/       ready-made scenes: berlin, munich, zugspitze
+scripts/      fetch_dem.py and fetch_map.py - the only things here that
+              touch the network
 ```

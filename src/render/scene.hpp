@@ -16,6 +16,7 @@
 
 #include "geo/camera_model.hpp"
 #include "geo/geolocate.hpp"
+#include "geo/maptile.hpp"
 #include "geo/pose.hpp"
 #include "geo/terrain.hpp"
 #include "gl/mesh.hpp"
@@ -46,7 +47,7 @@ inline constexpr glm::vec4 text_label{0.50f, 0.78f, 0.95f, 1.0f};
 inline constexpr glm::vec4 text_value{1.00f, 0.90f, 0.45f, 1.0f};
 inline constexpr glm::vec4 text_warn{1.00f, 0.50f, 0.40f, 1.0f};
 inline constexpr glm::vec4 text_good{0.55f, 0.95f, 0.60f, 1.0f};
-inline constexpr glm::vec4 panel{0.05f, 0.07f, 0.10f, 0.78f};
+inline constexpr glm::vec4 panel{0.04f, 0.06f, 0.09f, 0.90f};
 inline constexpr glm::vec4 panel_edge{0.35f, 0.45f, 0.55f, 0.9f};
 }  // namespace colours
 
@@ -62,12 +63,22 @@ public:
     const std::string& error() const { return error_; }
 
     // Rebuilds the terrain surface mesh. Called once at start-up and again
-    // whenever the terrain kind changes.
-    void buildTerrain(const Terrain& terrain);
+    // whenever the terrain changes.
+    //
+    // `frame` and `map` are needed together: the map's texture coordinates
+    // are computed per post from that post's own latitude and longitude,
+    // which only the frame can supply. Pass a null map for untextured terrain.
+    void buildTerrain(const Terrain& terrain, const EnuFrame& frame, const MapRaster* map);
+
+    // Uploads a map raster as the terrain texture. Call before buildTerrain,
+    // which bakes the coordinates that index it.
+    void setMapRaster(const MapRaster& map);
+    void clearMapRaster();
+    bool hasMap() const { return map_texture_ != 0; }
 
     // --- world pass -------------------------------------------------------
     void beginWorld(const glm::mat4& view_projection, const glm::vec3& eye_position,
-                    const Terrain& terrain, float contour_interval_m);
+                    const Terrain& terrain, float contour_interval_m, bool show_map);
     void drawTerrain();
     PrimitiveBatch& world() { return world_lines_; }
     void endWorld();
@@ -107,6 +118,7 @@ private:
     std::unique_ptr<Shader> text_shader_;
 
     SurfaceMesh terrain_mesh_;
+    GLuint map_texture_ = 0;
     PrimitiveBatch world_lines_{PrimitiveBatch::Mode::Lines};
     PrimitiveBatch overlay_lines_{PrimitiveBatch::Mode::Lines};
     PrimitiveBatch overlay_fills_{PrimitiveBatch::Mode::Triangles};

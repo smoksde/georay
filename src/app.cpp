@@ -4,6 +4,7 @@
 #include <cmath>
 #include <cstdio>
 #include <iostream>
+#include <fstream>
 #include <sstream>
 #include <vector>
 
@@ -49,6 +50,82 @@ std::string formatDistance(double metres) {
 }  // namespace
 
 App::App() : frame_(frame_origin_) {}
+
+bool App::Options::loadScene(const std::string& path, Options& options, std::string& error) {
+    std::ifstream file(path);
+    if (!file) {
+        error = "cannot open scene " + path;
+        return false;
+    }
+
+    std::string line;
+    int line_number = 0;
+    while (std::getline(file, line)) {
+        ++line_number;
+        // Strip comments and surrounding whitespace, then skip blanks. The
+        // format is deliberately this dumb: a scene file is a handful of
+        // numbers, and a JSON parser would be more code than the thing it
+        // reads.
+        const size_t hash = line.find('#');
+        if (hash != std::string::npos) line = line.substr(0, hash);
+
+        std::istringstream stream(line);
+        std::string key;
+        if (!(stream >> key)) continue;
+
+        std::string value;
+        std::getline(stream, value);
+        const size_t first = value.find_first_not_of(" \t\r");
+        const size_t last = value.find_last_not_of(" \t\r");
+        value = (first == std::string::npos) ? "" : value.substr(first, last - first + 1);
+
+        auto number = [&](double& target) {
+            try {
+                target = std::stod(value);
+                return true;
+            } catch (...) {
+                error = path + ":" + std::to_string(line_number) + ": '" + value +
+                        "' is not a number";
+                return false;
+            }
+        };
+
+        if (key == "name") {
+            options.scene_name = value;
+        } else if (key == "origin") {
+            if (std::sscanf(value.c_str(), "%lf,%lf", &options.origin_latitude_deg,
+                            &options.origin_longitude_deg) != 2) {
+                error = path + ":" + std::to_string(line_number) + ": origin wants LAT,LON";
+                return false;
+            }
+        } else if (key == "extent") {
+            if (!number(options.half_extent_m)) return false;
+        } else if (key == "dem") {
+            options.dem_directory = value;
+        } else if (key == "map") {
+            options.map_path = value;
+        } else if (key == "geoid") {
+            options.geoid_grid_path = value;
+        } else if (key == "geoid-separation") {
+            if (!number(options.geoid_separation_m)) return false;
+            options.geoid_separation_given = true;
+        } else if (key == "pattern") {
+            options.flight_pattern = value;
+        } else if (key == "radius") {
+            if (!number(options.orbit_radius_m)) return false;
+        } else if (key == "height-agl") {
+            if (!number(options.height_agl_m)) return false;
+        } else if (key == "speed") {
+            if (!number(options.speed_mps)) return false;
+        } else {
+            // An unknown key is a typo, and silently ignoring it would mean a
+            // scene that quietly does not do what it says.
+            error = path + ":" + std::to_string(line_number) + ": unknown setting '" + key + "'";
+            return false;
+        }
+    }
+    return true;
+}
 
 App::~App() {
     scene_.reset();
@@ -184,6 +261,21 @@ bool App::buildWorld() {
         }
     }
 
+    if (!options_.map_path.empty()) {
+        std::string error;
+        if (MapRaster::load(options_.map_path, map_, error)) {
+            scene_->setMapRaster(map_);
+            std::cout << "georay: map " << map_.width() << "x" << map_.height() << " at zoom "
+                      << map_.zoom() << ", " << map_.metresPerPixel(frame_origin_.latitude_deg)
+                      << " m/pixel, " << map_.attribution() << "\n";
+        } else {
+            // Same reasoning as a missing DEM: the tool works without it, so
+            // say what is wrong and carry on rather than refusing to start.
+            std::cerr << "georay: " << error << "\n"
+                      << "georay: continuing without a map; run scripts/fetch_map.py\n";
+        }
+    }
+
     if (geoid_.isIdentity() && using_dem_) {
         // Worth saying out loud: without it every elevation this tool reports
         // is wrong by the separation, which is tens of metres in most of the
@@ -193,7 +285,7 @@ bool App::buildWorld() {
                      "or --geoid.\n";
     }
 
-    scene_->buildTerrain(*terrain_);
+    scene_->buildTerrain(*terrain_, frame_, map_.valid() ? &map_ : nullptr);
     return true;
 }
 
@@ -237,12 +329,17 @@ void App::buildStructures() {
 }
 
 void App::resetSimulation() {
-    flight_.configure(FlightSimulator::Pattern::Orbit, glm::dvec2(0.0, 0.0));
+    FlightSimulator::Pattern pattern = FlightSimulator::Pattern::Orbit;
+    if (options_.flight_pattern == "lawnmower") pattern = FlightSimulator::Pattern::Lawnmower;
+    else if (options_.flight_pattern == "transit") pattern = FlightSimulator::Pattern::Transit;
+    else if (options_.flight_pattern == "hold") pattern = FlightSimulator::Pattern::Hold;
+
+    flight_.configure(pattern, glm::dvec2(0.0, 0.0));
     flight_.setGimbalMode(FlightSimulator::GimbalMode::TrackPoint);
     flight_.setTrackTargetEnu(glm::dvec2(0.0, 0.0));
-    flight_.setHeightAboveGround(220.0);
-    flight_.setRadius(520.0);
-    flight_.setSpeed(20.0);
+    flight_.setHeightAboveGround(options_.height_agl_m);
+    flight_.setRadius(options_.orbit_radius_m);
+    flight_.setSpeed(options_.speed_mps);
 
     uav_ = UavState();
     uav_.camera_offset_body = glm::dvec3(0.25, 0.0, 0.35);
@@ -342,6 +439,9 @@ void App::onKeyDown(const SDL_Keysym& key) {
         case SDLK_v:
             large_inset_ = !large_inset_;
             break;
+        case SDLK_m:
+            show_map_ = !show_map_;
+            break;
         case SDLK_b:
             follow_aircraft_ = !follow_aircraft_;
             break;
@@ -365,7 +465,7 @@ void App::onKeyDown(const SDL_Keysym& key) {
                                            Terrain::Kind::Valley, Terrain::Kind::Mountains};
             terrain_->generate(kinds[key.sym - SDLK_1]);
             using_dem_ = false;
-            scene_->buildTerrain(*terrain_);
+            scene_->buildTerrain(*terrain_, frame_, map_.valid() ? &map_ : nullptr);
             // The pick refers to the old surface, so it is no longer an
             // answer to anything.
             have_pick_ = false;
@@ -377,7 +477,7 @@ void App::onKeyDown(const SDL_Keysym& key) {
             // measured and synthetic ground on the same scene is the most
             // direct way to see how much the terrain model actually matters.
             if (dem_ && loadDemTerrain()) {
-                scene_->buildTerrain(*terrain_);
+                scene_->buildTerrain(*terrain_, frame_, map_.valid() ? &map_ : nullptr);
                 have_pick_ = false;
             }
             break;
@@ -625,11 +725,13 @@ void App::renderWorldView() {
     const glm::mat4 view_projection = view_camera_.viewProjection();
     const glm::vec3 eye = view_camera_.position();
 
-    scene_->beginWorld(view_projection, eye, *terrain_, show_contours_ ? 25.0f : 0.0f);
+    scene_->beginWorld(view_projection, eye, *terrain_, show_contours_ ? 25.0f : 0.0f,
+                       show_map_);
     scene_->drawTerrain();
 
     PrimitiveBatch& lines = scene_->world();
-    scene_->addGroundGrid(*terrain_, 200.0);
+    // A grid drawn over a readable map is clutter, not scale.
+    if (!(show_map_ && scene_->hasMap())) scene_->addGroundGrid(*terrain_, 200.0);
     scene_->addFrameAxes(300.0);
 
     // Structures, as wireframe boxes standing on the surface.
@@ -695,11 +797,12 @@ void App::renderCameraInset() {
         camera_.glProjectionMatrix(1.0, 60000.0) * cameraViewMatrix();
     const glm::vec3 eye = toFloat(cameraPositionEnu(uav_, frame_));
 
-    scene_->beginWorld(view_projection, eye, *terrain_, show_contours_ ? 25.0f : 0.0f);
+    scene_->beginWorld(view_projection, eye, *terrain_, show_contours_ ? 25.0f : 0.0f,
+                       show_map_);
     scene_->drawTerrain();
 
     PrimitiveBatch& lines = scene_->world();
-    scene_->addGroundGrid(*terrain_, 200.0);
+    if (!(show_map_ && scene_->hasMap())) scene_->addGroundGrid(*terrain_, 200.0);
     for (const Structure& s : structures_) {
         const double base = terrain_->sampleHeight(s.position_enu.x, s.position_enu.y);
         const glm::vec3 centre(float(s.position_enu.x), float(s.position_enu.y),
@@ -817,12 +920,14 @@ void App::renderHud() {
         const float w = 400.0f;
         float rows = 9.0f;
         if (using_dem_) rows += dem_report_.posts_filled > 0 ? 2.0f : 1.0f;
+        if (map_.valid()) rows += 1.0f;
         const float h = rows * line_h + 2.0f * pad;
         const float y = pad + 20.0f * line_h + 2.0f * pad + pad;
         panel(pad, y, w, h);
         Cursor c{text, pad * 2.0f, y + pad, s, line_h};
 
-        c.line("SIMULATION", colours::text_primary);
+        c.line(options_.scene_name.empty() ? std::string("SIMULATION") : options_.scene_name,
+               colours::text_primary);
         c.row("PATTERN", FlightSimulator::patternName(flight_.pattern()), colours::text_good);
         c.row("STATE", paused_ ? "PAUSED" : "RUNNING",
               paused_ ? colours::text_warn : colours::text_good);
@@ -831,6 +936,17 @@ void App::renderHud() {
         c.row("ORBIT RADIUS", num(flight_.radius(), 0) + " M", colours::text_value);
         c.row("TERRAIN", terrain_->sourceName(),
               using_dem_ ? colours::text_good : colours::text_value);
+        if (map_.valid()) {
+            // The map's ground resolution against the camera's own GSD is the
+            // number that says whether zooming in further can show you
+            // anything: below about one map pixel per camera pixel, the view
+            // is magnifying the basemap rather than resolving the ground.
+            c.row("MAP", show_map_
+                             ? num(map_.metresPerPixel(frame_origin_.latitude_deg), 2) +
+                                   " M/PX Z" + std::to_string(map_.zoom())
+                             : "HIDDEN (M)",
+                  show_map_ ? colours::text_value : colours::text_dim);
+        }
         if (using_dem_) {
             c.row("GEOID", geoid_.description(),
                   geoid_.isIdentity() ? colours::text_warn : colours::text_value);
@@ -977,16 +1093,40 @@ void App::renderHud() {
             lines.addSegment(p + glm::vec3(2, -2, 0), p + glm::vec3(9, -9, 0), colour);
         }
 
-        text.add("SIMULATED UAV CAMERA", {rect.x + 6.0f, rect.y + 6.0f}, s,
-                 colours::text_primary);
+        // Text over the camera view needs its own backing. Without a map the
+        // terrain is dark and light text reads fine; with one, the ground
+        // underneath can be white paper, and the label disappears.
+        auto labelled = [&](const std::string& content, float y, const glm::vec4& colour) {
+            const float width = TextRenderer::textWidth(content, s) + 10.0f;
+            fills.addQuad({rect.x + 2.0f, y - 3.0f}, {width, 5.0f * s + 6.0f},
+                          glm::vec4(0.04f, 0.06f, 0.09f, 0.82f));
+            text.add(content, {rect.x + 7.0f, y}, s, colour);
+        };
+
+        labelled("SIMULATED UAV CAMERA", rect.y + 6.0f, colours::text_primary);
+
         if (hover_valid_ && hover_result_.valid) {
             // A live readout pinned to the bottom of the inset, so a value is
             // available without clicking.
             const std::string live = formatLatitude(hover_result_.ground_geodetic.latitude_deg) +
                                      "  " +
                                      formatLongitude(hover_result_.ground_geodetic.longitude_deg);
-            text.add(live, {rect.x + 6.0f, rect.y + rect.w - 6.0f - 5.0f * s}, s,
-                     colours::text_value);
+            labelled(live, rect.y + rect.w - 8.0f - 5.0f * s, colours::text_value);
+        }
+
+        // Map credit. Not decoration: OpenStreetMap's tiles are CC-BY-SA and
+        // the attribution travels inside the raster precisely so that whoever
+        // fetched it gets credited wherever it is shown. Drawn whenever the
+        // map is visible, at the bottom of the window where it is out of the
+        // way but not hidden.
+        if (show_map_ && scene_->hasMap() && !map_.attribution().empty()) {
+            const std::string credit = map_.attribution();
+            const float width = TextRenderer::textWidth(credit, 1.0f) + 8.0f;
+            const float x = float(width_) - width - 4.0f;
+            const float y = float(height_) - 5.0f - 4.0f;
+            fills.addQuad({x - 2.0f, y - 2.0f}, {width, 9.0f},
+                          glm::vec4(0.04f, 0.06f, 0.09f, 0.7f));
+            text.add(credit, {x + 2.0f, y}, 1.0f, colours::text_dim);
         }
     }
 
@@ -1020,6 +1160,7 @@ void App::renderHud() {
             "C                    CONTOUR LINES",
             "X                    FLAT-EARTH ERROR",
             "V                    CAMERA VIEW SIZE",
+            "M                    MAP OVERLAY",
             "R                    RESET",
             "F12                  SCREENSHOT",
             "Q / ESC              QUIT",
