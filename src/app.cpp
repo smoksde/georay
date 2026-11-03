@@ -251,7 +251,12 @@ void App::resetSimulation() {
     flight_.update(0.0, *terrain_, frame_, uav_);
 
     view_camera_.setTarget(glm::vec3(0.0f, 0.0f, float(terrain_->sampleHeight(0, 0))));
-    view_camera_.setDistance(float(terrain_->halfExtent()) * 0.5f);
+    // Back off far enough to frame the terrain's relief as well as its
+    // extent. Scaling by the horizontal size alone is fine on a plain and
+    // puts the camera inside the mountain on real alpine terrain, where the
+    // scene is 2 km tall and only 6 km wide.
+    const float relief = float(terrain_->maxHeight() - terrain_->minHeight());
+    view_camera_.setDistance(std::max(float(terrain_->halfExtent()) * 0.5f, relief * 1.5f));
 
     have_pick_ = false;
     hover_valid_ = false;

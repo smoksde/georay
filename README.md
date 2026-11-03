@@ -59,6 +59,41 @@ Press `0` for the real terrain and `1`–`4` for the synthetic generators, on th
 same scene — switching back and forth is the most direct way to see how much
 the ground model actually changes an answer.
 
+![georay over the Zugspitze massif](docs/screenshot-dem.png)
+
+*Real SRTM data over the Zugspitze massif (`--origin 47.435,10.99
+--geoid-separation 48`): two tiles across the 11°E seam, 2010 m of relief in a
+6 km box. The flat-earth error on the picked pixel is 59 m there, against 4 m
+over the Munich plain — which is the whole argument for terrain-aware
+geolocation in one number.*
+
+### Verified against published elevations
+
+The format handling was checked against ground truth rather than only against
+itself, because a misread `.hgt` produces terrain that still looks like
+terrain:
+
+| Point | georay | Published | Δ |
+| --- | --- | --- | --- |
+| Eibsee, lake surface | 973 m | 973 m | 0 |
+| Mittenwald | 915 m | 912 m | +3 |
+| Garmisch-Partenkirchen | 703 m | 708 m | −5 |
+| Munich, Marienplatz | 523 m | 519 m | +4 |
+| Munich airport (MUC) | 455 m | 448 m | +7 |
+| Zugspitze summit | 2940 m | 2962 m | −22 |
+| Ehrwald | 970 m | 996 m | −26 |
+
+A flat lake surface is the strongest check — no slope to smooth — and it comes
+out exact. The town values sit inside SRTM's ~6 m vertical accuracy, with the
+positive bias at the Munich city centre and airport being what a DSM measuring
+rooftops should do. The two large negatives are expected and not errors: a
+30 m posting cannot resolve a knife-edge summit, and Ehrwald sits in a steep
+valley where radar layover pulls the value down.
+
+The sharpest check is the north–south gradient across `N48E011`, which falls
+from 569 m near Munich to ~410 m toward the Danube. Read the rows south-first
+and Munich comes out at 451 m — perfectly plausible, and 72 m wrong.
+
 **georay itself never touches the network.** The script is the only thing that
 does, and you run it deliberately; georay only ever reads local files. That
 keeps the binary free of libcurl and TLS, keeps `--selftest` runnable offline,
