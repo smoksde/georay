@@ -1,3 +1,6 @@
 build/
 build-*/
 *.bmp
+# Elevation tiles and geoid grids are fetched with scripts/fetch_dem.py.
+# They are large, reproducible, and not ours to redistribute.
+data/

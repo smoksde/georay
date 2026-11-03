@@ -88,6 +88,8 @@ endif()
 add_library(georay_geo STATIC
     src/geo/geodetic.cpp
     src/geo/camera_model.cpp
+    src/geo/dem.cpp
+    src/geo/geoid.cpp
     src/geo/pose.cpp
     src/geo/terrain.cpp
     src/geo/geolocate.cpp

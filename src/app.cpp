@@ -110,11 +110,7 @@ bool App::initialise(const Options& options) {
         return false;
     }
 
-    // 6 km across at ~12 m postings, which is a realistic DEM resolution and
-    // keeps the surface mesh (about 260k triangles) comfortable to draw.
-    terrain_ = std::make_unique<Terrain>(Terrain::Kind::Hills, 3000.0, 513, 0.0);
-    flat_reference_ = std::make_unique<Terrain>(Terrain::Kind::Flat, 30000.0, 17, 0.0);
-    scene_->buildTerrain(*terrain_);
+    if (!buildWorld()) return false;
 
     // A payload in the class of a small UAV mapping camera: 1" sensor,
     // 1920x1080 video out, a mild wide angle.
@@ -136,6 +132,88 @@ bool App::initialise(const Options& options) {
     return true;
 }
 
+bool App::buildWorld() {
+    // Geoid model first: the frame's own origin altitude depends on it.
+    if (!options_.geoid_grid_path.empty()) {
+        std::string error;
+        if (!GeoidModel::loadGrid(options_.geoid_grid_path, geoid_, error)) {
+            std::cerr << "georay: " << error << "\n";
+            return false;
+        }
+    } else if (options_.geoid_separation_given) {
+        geoid_ = GeoidModel::constant(options_.geoid_separation_m);
+    }
+
+    // A provisional frame at sea level, only so the DEM can be asked what the
+    // ground height at the origin is. The real frame is built from the
+    // answer, below: putting the origin at ground level is what keeps ENU z
+    // near zero across the scene, which is both easier to read and kinder to
+    // float precision in the renderer.
+    frame_origin_ = Geodetic(options_.origin_latitude_deg, options_.origin_longitude_deg, 0.0);
+    frame_ = EnuFrame(frame_origin_);
+
+    // 513 posts across whatever extent was asked for - about 12 m at the
+    // default 6 km, finer than SRTM's 30 m posting, and a surface mesh of
+    // around 260k triangles, which draws comfortably.
+    terrain_ = std::make_unique<Terrain>(Terrain::Kind::Hills, options_.half_extent_m, 513, 0.0);
+    // The flat-earth reference deliberately spans far more than the scene:
+    // its whole job is to answer "where would a terrain-unaware system have
+    // put this", including for rays that leave the real terrain's coverage.
+    flat_reference_ =
+        std::make_unique<Terrain>(Terrain::Kind::Flat, options_.half_extent_m * 10.0, 17, 0.0);
+
+    if (!options_.dem_directory.empty()) {
+        dem_ = std::make_unique<DemSource>(options_.dem_directory);
+
+        double ground_orthometric = 0.0;
+        if (dem_->sampleOrthometric(frame_origin_.latitude_deg, frame_origin_.longitude_deg,
+                                    ground_orthometric)) {
+            frame_origin_.altitude_m = geoid_.toEllipsoidal(
+                frame_origin_.latitude_deg, frame_origin_.longitude_deg, ground_orthometric);
+            frame_ = EnuFrame(frame_origin_);
+        }
+
+        if (!loadDemTerrain()) {
+            // Fall back to synthetic rather than exiting. The tool is still
+            // completely usable without real data, and a hard failure here
+            // would turn a missing file into "georay does not start".
+            std::cerr << "georay: " << dem_report_.error << "\n"
+                      << "georay: falling back to synthetic terrain; "
+                         "run scripts/fetch_dem.py to get tiles for this area\n";
+            terrain_->generate(Terrain::Kind::Hills);
+        }
+    }
+
+    if (geoid_.isIdentity() && using_dem_) {
+        // Worth saying out loud: without it every elevation this tool reports
+        // is wrong by the separation, which is tens of metres in most of the
+        // populated world.
+        std::cerr << "georay: no geoid separation given, so DEM heights stay orthometric.\n"
+                  << "georay: pass --geoid-separation (about 47 for southern Germany) "
+                     "or --geoid.\n";
+    }
+
+    scene_->buildTerrain(*terrain_);
+    return true;
+}
+
+bool App::loadDemTerrain() {
+    if (!dem_) return false;
+    dem_report_ = terrain_->loadFromDem(*dem_, geoid_, frame_);
+    using_dem_ = dem_report_.ok;
+    if (using_dem_) {
+        std::cout << "georay: loaded " << dem_report_.tiles_used.size() << " tile(s), "
+                  << dem_report_.posts_from_data << "/" << dem_report_.posts_total
+                  << " posts from data";
+        if (dem_report_.posts_filled > 0) {
+            std::cout << ", " << dem_report_.posts_filled << " interpolated across gaps";
+        }
+        std::cout << "\ngeoray: ground at the origin " << dem_report_.origin_orthometric_m
+                  << " m orthometric, geoid " << geoid_.description() << "\n";
+    }
+    return using_dem_;
+}
+
 void App::buildStructures() {
     // Placed deterministically, spread across the middle of the terrain where
     // the aircraft actually flies. Heights vary so the parallax between them
@@ -145,10 +223,13 @@ void App::buildStructures() {
         {620.0, -260.0, 22.0},  {-60.0, 520.0, 48.0},   {420.0, 640.0, 18.0},
         {-700.0, -640.0, 31.0}, {840.0, 320.0, 26.0},   {120.0, -760.0, 38.0},
     };
+    // Positions are given for a 3 km half-extent and scaled to whatever the
+    // scene actually is, so they stay inside the terrain at any extent.
+    const double scale = terrain_ ? terrain_->halfExtent() / 3000.0 : 1.0;
     structures_.clear();
     for (const auto& o : offsets) {
         Structure s;
-        s.position_enu = glm::dvec2(o[0], o[1]);
+        s.position_enu = glm::dvec2(o[0], o[1]) * scale;
         s.height_m = o[2];
         s.half_width_m = 6.0 + o[2] * 0.12;
         structures_.push_back(s);
@@ -170,7 +251,7 @@ void App::resetSimulation() {
     flight_.update(0.0, *terrain_, frame_, uav_);
 
     view_camera_.setTarget(glm::vec3(0.0f, 0.0f, float(terrain_->sampleHeight(0, 0))));
-    view_camera_.setDistance(1500.0f);
+    view_camera_.setDistance(float(terrain_->halfExtent()) * 0.5f);
 
     have_pick_ = false;
     hover_valid_ = false;
@@ -278,12 +359,23 @@ void App::onKeyDown(const SDL_Keysym& key) {
             const Terrain::Kind kinds[] = {Terrain::Kind::Flat, Terrain::Kind::Hills,
                                            Terrain::Kind::Valley, Terrain::Kind::Mountains};
             terrain_->generate(kinds[key.sym - SDLK_1]);
+            using_dem_ = false;
             scene_->buildTerrain(*terrain_);
             // The pick refers to the old surface, so it is no longer an
             // answer to anything.
             have_pick_ = false;
             break;
         }
+
+        case SDLK_0:
+            // Back to the real data, if there is any. Switching between
+            // measured and synthetic ground on the same scene is the most
+            // direct way to see how much the terrain model actually matters.
+            if (dem_ && loadDemTerrain()) {
+                scene_->buildTerrain(*terrain_);
+                have_pick_ = false;
+            }
+            break;
 
         case SDLK_p: {
             const int next = (int(flight_.pattern()) + 1) % 4;
@@ -718,7 +810,9 @@ void App::renderHud() {
     // ---- simulation state ---------------------------------------------
     {
         const float w = 400.0f;
-        const float h = 9.0f * line_h + 2.0f * pad;
+        float rows = 9.0f;
+        if (using_dem_) rows += dem_report_.posts_filled > 0 ? 2.0f : 1.0f;
+        const float h = rows * line_h + 2.0f * pad;
         const float y = pad + 20.0f * line_h + 2.0f * pad + pad;
         panel(pad, y, w, h);
         Cursor c{text, pad * 2.0f, y + pad, s, line_h};
@@ -730,7 +824,18 @@ void App::renderHud() {
         c.row("RATE", num(sim_rate_, 3) + " X", colours::text_value);
         c.row("GROUND SPEED", num(flight_.speed(), 1) + " M/S", colours::text_value);
         c.row("ORBIT RADIUS", num(flight_.radius(), 0) + " M", colours::text_value);
-        c.row("TERRAIN", Terrain::kindName(terrain_->kind()), colours::text_value);
+        c.row("TERRAIN", terrain_->sourceName(),
+              using_dem_ ? colours::text_good : colours::text_value);
+        if (using_dem_) {
+            c.row("GEOID", geoid_.description(),
+                  geoid_.isIdentity() ? colours::text_warn : colours::text_value);
+            if (dem_report_.posts_filled > 0) {
+                // An interpolated post is an invented elevation. It is often
+                // the right thing to do, but never the right thing to hide.
+                c.row("DEM GAPS", num(dem_report_.gapFraction() * 100.0, 1) + " PCT FILLED",
+                      colours::text_warn);
+            }
+        }
         if (!show_footprint_) {
             c.row("FOOTPRINT", "HIDDEN (F)", colours::text_dim);
         } else if (footprint_.complete) {
@@ -898,7 +1003,8 @@ void App::renderHud() {
             "T                    TRACK PICKED POINT",
             "B                    FOLLOW TARGET",
             "",
-            "1 2 3 4              TERRAIN TYPE",
+            "1 2 3 4              SYNTHETIC TERRAIN",
+            "0                    REAL DEM TERRAIN",
             "[ ]                  CAMERA ZOOM",
             ", .                  HEIGHT AGL",
             "- =                  GROUND SPEED",

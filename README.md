@@ -43,6 +43,75 @@ Other modes:
 | `./build/georay --selftest` | Runs the numeric verification suite and exits. No window, no GL — works headless. |
 | `./build/georay --screenshot out.bmp` | Renders a few frames, saves a BMP, exits. |
 | `./build/georay --size 1920x1080` | Window size. |
+| `./build/georay --origin LAT,LON --extent M` | Where the scene is, and how big. |
+
+## Real elevation data
+
+georay runs on synthetic terrain out of the box, and on real SRTM elevation
+data when you give it some. Fetch tiles for an area:
+
+```bash
+scripts/fetch_dem.py --origin 48.1375,11.5755 --extent 3000
+./build/georay --dem data/dem --origin 48.1375,11.5755 --extent 3000 --geoid-separation 47
+```
+
+Press `0` for the real terrain and `1`–`4` for the synthetic generators, on the
+same scene — switching back and forth is the most direct way to see how much
+the ground model actually changes an answer.
+
+**georay itself never touches the network.** The script is the only thing that
+does, and you run it deliberately; georay only ever reads local files. That
+keeps the binary free of libcurl and TLS, keeps `--selftest` runnable offline,
+and keeps bulk downloading something you asked for rather than something a
+render loop does on your behalf.
+
+Elevation comes from the AWS `elevation-tiles-prod` open-data bucket, which
+serves SRTM in skadi layout — gzipped `.hgt`, no account, no API key. Tiles are
+1° square, 3601×3601 at 1 arc-second (~30 m), about 7 MB compressed and 26 MB
+on disk. SRTM covers 60°N to 56°S and has no tiles over open ocean.
+
+### Why `--geoid-separation` is not optional
+
+The two height systems in play are different systems. A GPS receiver reports
+height above the **ellipsoid**; SRTM reports height above the **geoid**, which
+is what "metres above sea level" means on a map. Near Munich they differ by
+about 47 m.
+
+Skip it and nothing looks broken — the terrain renders, the rays hit it, the
+latitudes and longitudes are even correct. Only the heights are wrong, by the
+separation; and since the aircraft's altitude is ellipsoidal while the ground
+is orthometric, it ends up flying 47 m lower over the terrain than commanded,
+which quietly changes every slant range, footprint and geolocated elevation.
+The HUD shows `GEOID: NONE — HEIGHTS ARE ORTHOMETRIC` in red when it is unset.
+
+A **single constant for the whole scene is the right answer here**, not a
+shortcut: the geoid is a long-wavelength surface varying roughly a centimetre
+per kilometre, so one value taken at the origin is good to a few centimetres
+across a scene tens of kilometres wide — far below SRTM's own ~6 m vertical
+accuracy. Rough values: ~47 m southern Germany, ~34 m Colorado, ~−30 m
+southern India. `--geoid FILE` takes a full grid (converted from a
+GeographicLib geoid file by `scripts/fetch_dem.py --geoid-pgm`) if you need
+continental distances.
+
+### What the DEM path guarantees
+
+- **Heights go through the ellipsoid, not a subtraction.** Each post is
+  converted geodetic → ENU through the same frame everything else uses, which
+  carries the tangent-plane curvature term — flat ground 3 km from the origin
+  sits 0.71 m *below* the tangent plane, and a flat subtraction would bake that
+  into the terrain as a dome.
+- **Voids are not zero.** SRTM's `-32768` void marker is excluded from the
+  interpolation rather than read as a hole 32 km deep. Posts with no data at
+  all are filled by diffusing their neighbours inwards — and the HUD then
+  reports `DEM GAPS: n PCT FILLED` in red, because an interpolated post is an
+  invented elevation, and that is often the right thing to do but never the
+  right thing to hide.
+- **Missing coverage is reported, not assumed to be sea.** A scene straddling
+  a tile that is not on disk says so.
+- **A failed load leaves the previous terrain alone** and falls back to
+  synthetic with a message, rather than replacing the scene with a flat sheet
+  of invented mean elevation that would look like a successful load of very
+  boring ground.
 
 ## Controls
 
@@ -53,7 +122,8 @@ Other modes:
 | `Space`, `PgUp`/`PgDn` | Pause, simulation rate |
 | `P`, `G`, arrows | Flight pattern, gimbal mode, manual gimbal aim |
 | `T`, `B` | Track the picked point, follow the target |
-| `1` `2` `3` `4` | Terrain: flat, hills, valley, mountains |
+| `1` `2` `3` `4` | Synthetic terrain: flat, hills, valley, mountains |
+| `0` | Back to the real DEM terrain, if loaded |
 | `[` `]`, `,` `.`, `-` `=`, `;` `'` | Camera zoom, height AGL, ground speed, orbit radius |
 | `D`, `F`, `C`, `X`, `V` | Lens distortion, footprint, contours, flat-earth error, inset size |
 | `R`, `F12`, `H`, `Q` | Reset, screenshot, help, quit |
@@ -127,15 +197,21 @@ the code:
   more terrain.
 - The rendered simulated-camera view against the geolocation maths, so what you
   click is what is computed.
+- The DEM path, against synthetic `.hgt` files whose heights encode their own
+  post indices — pinning the big-endian byte order, the north-first row order
+  (flip it and the terrain still looks like terrain, just mirrored), void
+  handling, tile selection across hemispheres, and continuity across a tile
+  seam. The resampling is checked against the closed-form curvature drop
+  `d²/2R` and against gradients computed from metres-per-degree, so none of it
+  is verified by re-running the code under test.
+
+The DEM tests build their own tiles rather than downloading one: a test that
+needs 7 MB fetched from AWS is a test that gets skipped.
 
 ## Known limitations
 
 These are deliberate, and each is where a production pipeline would differ.
 
-- **Synthetic terrain, not a DEM.** The ground is a generated heightfield, but
-  it is stored and sampled exactly as a DEM tile would be, so loading real data
-  means filling the same array — see the header comment in
-  [`src/geo/terrain.hpp`](src/geo/terrain.hpp) for the conversion that applies.
 - **The ground model is a DTM, not a DSM.** Rays intersect terrain, not the
   structures standing on it. Click the top of one of the towers and you get the
   ground *behind* it. That is left visible on purpose: it is the single largest
@@ -145,18 +221,25 @@ These are deliberate, and each is where a production pipeline would differ.
   the picture stays an ideal pinhole render, so the two diverge towards the
   frame edges — the HUD says so while it is active. Fixing it properly means
   rendering to a texture and warping it.
-- **Altitudes are ellipsoidal throughout.** Real DEMs are usually orthometric
-  (above the geoid); a geoid model would be added in `sampleHeight`.
+- **SRTM is a 2000-vintage radar DSM at ~30 m posting**, with roughly 6 m
+  vertical accuracy, and over forest and cities it measures the canopy and
+  rooftops rather than the ground. A photogrammetry pipeline that cared would
+  use a modern lidar DTM where one exists.
+- **Only SRTM `.hgt` is read.** Copernicus GLO-30 and most national products
+  ship as GeoTIFF, which needs a TIFF reader this deliberately does not have.
+  The conversion would belong in `scripts/fetch_dem.py`, where the messy
+  formats already live, writing the same simple arrays the C++ side reads.
 - **No atmospheric refraction**, which bends a long slant-range ray by a metre
   or so near the ground.
 
 ## Layout
 
 ```
-src/geo/      the geolocation maths - no GL anywhere in it, and a separate
-              CMake target so it stays that way
+src/geo/      the geolocation maths, and the DEM/geoid readers - no GL
+              anywhere in it, and a separate CMake target so it stays that way
 src/gl/       thin OpenGL wrappers: shaders, buffers, an embedded bitmap font
 src/render/   terrain mesh, 3D overlays, the orbit camera
 src/          the application: window, input, HUD, flight simulation, selftest
 shaders/      GLSL
+scripts/      fetch_dem.py - the only thing here that touches the network
 ```

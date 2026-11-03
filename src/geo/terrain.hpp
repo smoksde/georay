@@ -18,12 +18,17 @@
 // EnuFrame::fromGeodetic() rather than copying raw elevations in. That is
 // not busywork: it is what applies the tangent-plane curvature correction
 // (about 8 cm per kilometre from the origin, growing quadratically), and it
-// is where an orthometric DEM's geoid offset would be added.
+// is where an orthometric DEM's geoid offset is added. loadFromDem() below
+// does exactly that.
 
 #include <string>
 #include <vector>
 
 #include <glm/glm.hpp>
+
+#include "geo/dem.hpp"
+#include "geo/geodetic.hpp"
+#include "geo/geoid.hpp"
 
 namespace georay {
 
@@ -63,6 +68,44 @@ public:
     Kind kind() const { return kind_; }
     static const char* kindName(Kind kind);
 
+    // What produced the current heights, fit for a HUD row: "HILLS", or
+    // "SRTM N48E011". The synthetic Kind alone cannot answer that once real
+    // data is in play.
+    const std::string& sourceName() const { return source_name_; }
+
+    // How a DEM load went. Kept on the terrain rather than returned and
+    // forgotten, because "real elevation data" with a fifth of its posts
+    // invented is a different claim from the same terrain with none, and the
+    // user has to be able to see which they are looking at.
+    struct DemLoadReport {
+        bool ok = false;
+        int posts_total = 0;
+        int posts_from_data = 0;   // sampled directly from the DEM
+        int posts_filled = 0;      // interpolated across voids or missing tiles
+        std::vector<std::string> tiles_used;
+        std::vector<std::string> tiles_missing;
+        double origin_orthometric_m = 0.0;  // ground at the frame origin, per the DEM
+        double origin_separation_m = 0.0;   // geoid separation applied there
+        std::string error;
+
+        double gapFraction() const {
+            return posts_total > 0 ? double(posts_filled) / double(posts_total) : 0.0;
+        }
+    };
+
+    // Replace the heights with real elevation data, resampled onto this
+    // terrain's existing ENU grid.
+    //
+    // Resampling onto the ENU grid rather than adopting the DEM's own
+    // latitude/longitude grid is what keeps this change local: the ray
+    // marcher, the renderer and every existing test go on working on exactly
+    // the structure they already understand. It costs nothing in fidelity
+    // here either - at a few hundred posts across a few kilometres georay's
+    // grid is finer than SRTM's ~30 m posting, so this interpolates rather
+    // than decimates.
+    DemLoadReport loadFromDem(const DemSource& dem, const GeoidModel& geoid,
+                              const EnuFrame& frame);
+
     // Height at an east/north position, bilinearly interpolated. Positions
     // outside the modelled square clamp to the edge, which keeps the surface
     // closed; use inCoverage() to tell whether an answer is real.
@@ -94,7 +137,14 @@ public:
 private:
     void updateExtrema();
 
+    // Replaces missing posts by diffusing their valid neighbours inwards.
+    // SRTM voids are usually small and surrounded by data, so a few passes
+    // close them; a post that is still missing afterwards sits in a hole too
+    // large to invent, and takes the mean of whatever data did load.
+    int fillGaps(std::vector<bool>& has_data);
+
     Kind kind_ = Kind::Hills;
+    std::string source_name_ = "HILLS";
     double half_extent_m_ = 3000.0;
     int resolution_ = 513;
     double base_elevation_m_ = 0.0;

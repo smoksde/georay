@@ -19,6 +19,8 @@
 
 #include "flight.hpp"
 #include "geo/camera_model.hpp"
+#include "geo/dem.hpp"
+#include "geo/geoid.hpp"
 #include "geo/geolocate.hpp"
 #include "geo/pose.hpp"
 #include "geo/terrain.hpp"
@@ -38,6 +40,21 @@ public:
         // picture.
         std::string screenshot_path;
         int screenshot_frames = 4;
+
+        // Real elevation data. Empty means the synthetic terrain, which is
+        // still the default: it needs no files and makes the tool runnable
+        // the moment it is built.
+        std::string dem_directory;
+        std::string geoid_grid_path;
+        // A single separation for the scene, used when no grid is given. The
+        // geoid varies about a centimetre per kilometre, so one value is good
+        // to a few centimetres over a scene this size - see geoid.hpp.
+        double geoid_separation_m = 0.0;
+        bool geoid_separation_given = false;
+
+        double origin_latitude_deg = 48.137554;
+        double origin_longitude_deg = 11.575497;
+        double half_extent_m = 3000.0;
     };
 
     App();
@@ -66,6 +83,10 @@ private:
     // --- setup -----------------------------------------------------------
     void buildStructures();
     void resetSimulation();
+    // Builds the ENU frame and the terrain, from real elevation data when a
+    // DEM directory was given and from the synthetic generator otherwise.
+    bool buildWorld();
+    bool loadDemTerrain();
 
     // --- frame -----------------------------------------------------------
     void handleEvents();
@@ -110,6 +131,14 @@ private:
     EnuFrame frame_;
 
     std::unique_ptr<Terrain> terrain_;
+    // Only populated when real elevation data was requested. Kept alive
+    // because the terrain can be switched back and forth between the DEM and
+    // the synthetic generators at runtime, and re-reading the tiles each time
+    // would stall the frame.
+    std::unique_ptr<DemSource> dem_;
+    GeoidModel geoid_;
+    Terrain::DemLoadReport dem_report_;
+    bool using_dem_ = false;
     // A flat ground model at the frame origin's elevation, used only to
     // compute what a flat-earth geolocation would have said. Keeping it as a
     // real Terrain rather than a special case means the comparison goes

@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <numeric>
 
 namespace georay {
 namespace {
@@ -64,6 +65,7 @@ const char* Terrain::kindName(Kind kind) {
 
 void Terrain::generate(Kind kind) {
     kind_ = kind;
+    source_name_ = kindName(kind);
     heights_.assign(size_t(resolution_) * size_t(resolution_), base_elevation_m_);
 
     for (int iy = 0; iy < resolution_; ++iy) {
@@ -104,6 +106,138 @@ void Terrain::generate(Kind kind) {
         }
     }
     updateExtrema();
+}
+
+int Terrain::fillGaps(std::vector<bool>& has_data) {
+    const size_t count = heights_.size();
+    int missing = 0;
+    for (size_t i = 0; i < count; ++i) {
+        if (!has_data[i]) ++missing;
+    }
+    if (missing == 0 || missing == int(count)) return missing;
+
+    // Iterative neighbour diffusion. Each pass fills any gap post that has at
+    // least one filled neighbour, so a void closes inwards from its rim at
+    // one post per pass. The cap keeps a pathological input (a tile missing
+    // entirely) from turning into a long loop; what it cannot reach falls
+    // back to the mean below.
+    std::vector<double> next = heights_;
+    std::vector<bool> next_has = has_data;
+    for (int pass = 0; pass < 64; ++pass) {
+        bool changed = false;
+        for (int iy = 0; iy < resolution_; ++iy) {
+            for (int ix = 0; ix < resolution_; ++ix) {
+                const size_t index = size_t(iy) * size_t(resolution_) + size_t(ix);
+                if (has_data[index]) continue;
+
+                double sum = 0.0;
+                int n = 0;
+                for (int dy = -1; dy <= 1; ++dy) {
+                    for (int dx = -1; dx <= 1; ++dx) {
+                        const int nx = ix + dx, ny = iy + dy;
+                        if (nx < 0 || ny < 0 || nx >= resolution_ || ny >= resolution_) continue;
+                        const size_t j = size_t(ny) * size_t(resolution_) + size_t(nx);
+                        if (!has_data[j]) continue;
+                        sum += heights_[j];
+                        ++n;
+                    }
+                }
+                if (n > 0) {
+                    next[index] = sum / double(n);
+                    next_has[index] = true;
+                    changed = true;
+                }
+            }
+        }
+        heights_ = next;
+        has_data = next_has;
+        if (!changed) break;
+    }
+
+    // Anything still unreached: the mean of what did load, which at least
+    // keeps the surface at a sane elevation instead of at zero.
+    double sum = 0.0;
+    int n = 0;
+    for (size_t i = 0; i < count; ++i) {
+        if (has_data[i]) { sum += heights_[i]; ++n; }
+    }
+    const double mean = n > 0 ? sum / double(n) : 0.0;
+    for (size_t i = 0; i < count; ++i) {
+        if (!has_data[i]) heights_[i] = mean;
+    }
+    return missing;
+}
+
+Terrain::DemLoadReport Terrain::loadFromDem(const DemSource& dem, const GeoidModel& geoid,
+                                            const EnuFrame& frame) {
+    DemLoadReport report;
+    report.posts_total = resolution_ * resolution_;
+
+    std::vector<bool> has_data(heights_.size(), false);
+
+    for (int iy = 0; iy < resolution_; ++iy) {
+        for (int ix = 0; ix < resolution_; ++ix) {
+            const size_t index = size_t(iy) * size_t(resolution_) + size_t(ix);
+            const glm::dvec2 p = gridPosition(ix, iy);
+
+            // Where this ENU post actually is on the ellipsoid. Taking the
+            // latitude and longitude from a point on the tangent plane and
+            // then converting the sampled height back through the same frame
+            // is what carries the curvature term: over a few kilometres the
+            // tangent plane rises above the ellipsoid by tens of centimetres,
+            // and a flat subtraction would bake that straight into the
+            // terrain as a dome.
+            const Geodetic here = frame.toGeodetic(glm::dvec3(p.x, p.y, 0.0));
+
+            double orthometric = 0.0;
+            if (!dem.sampleOrthometric(here.latitude_deg, here.longitude_deg, orthometric)) {
+                continue;  // left as a gap; filled below
+            }
+
+            const double ellipsoidal =
+                geoid.toEllipsoidal(here.latitude_deg, here.longitude_deg, orthometric);
+            heights_[index] =
+                frame.fromGeodetic(Geodetic(here.latitude_deg, here.longitude_deg, ellipsoidal)).z;
+            has_data[index] = true;
+            ++report.posts_from_data;
+        }
+    }
+
+    report.tiles_used = dem.loadedTiles();
+    report.tiles_missing = dem.missingTiles();
+
+    if (report.posts_from_data == 0) {
+        // Nothing loaded at all. Leave the previous terrain in place rather
+        // than replacing it with a flat sheet of invented mean elevation,
+        // which would look like a successful load of very boring ground.
+        report.error = dem.lastError().empty()
+                           ? "no elevation data covers this area in " + dem.directory()
+                           : dem.lastError();
+        return report;
+    }
+
+    report.posts_filled = fillGaps(has_data);
+    updateExtrema();
+
+    const Geodetic origin = frame.origin();
+    report.origin_separation_m =
+        geoid.separationAt(origin.latitude_deg, origin.longitude_deg);
+    double origin_height = 0.0;
+    if (dem.sampleOrthometric(origin.latitude_deg, origin.longitude_deg, origin_height)) {
+        report.origin_orthometric_m = origin_height;
+    }
+
+    kind_ = Kind::Flat;  // no synthetic generator produced these
+    source_name_ = "SRTM";
+    if (!report.tiles_used.empty()) {
+        source_name_ += " " + report.tiles_used.front();
+        if (report.tiles_used.size() > 1) {
+            source_name_ += " +" + std::to_string(report.tiles_used.size() - 1);
+        }
+    }
+
+    report.ok = true;
+    return report;
 }
 
 void Terrain::updateExtrema() {
