@@ -791,9 +791,10 @@ void testGeoid() {
 
 // Writes a georay map raster with a known pixel pattern.
 std::string writeTestMap(const std::string& directory, int zoom, int tile_x, int tile_y,
-                         int tiles_x, int tiles_y, const std::string& attribution) {
+                         int tiles_x, int tiles_y, const std::string& attribution,
+                         int pixels_per_tile = 4) {
     const std::string path = directory + "/test.map";
-    const int width = tiles_x * 4, height = tiles_y * 4;  // 4 px per tile, enough to index
+    const int width = tiles_x * pixels_per_tile, height = tiles_y * pixels_per_tile;
     std::ofstream file(path, std::ios::binary);
     file.write("GEORAYM1", 8);
     const int32_t header[7] = {zoom, tile_x, tile_y, tiles_x, tiles_y, width, height};
@@ -885,14 +886,39 @@ void testMapRaster() {
         check(uv.x > 0.3 && uv.x < 0.7 && uv.y > 0.3 && uv.y < 0.7,
               "...and puts it near the middle, not at an edge");
 
-        // Ground resolution at zoom 16 and this latitude: about 1.45 m. A
-        // wrong power of two here would be off by a factor of two and is
-        // otherwise easy not to notice.
-        checkNear(map.metresPerPixel(52.5163), 1.4536, 1e-3,
-                  "ground resolution at zoom 16 in Berlin");
         checkNear(map.metresPerPixel(0.0), map.metresPerPixel(52.5163) /
                                                std::cos(deg2rad(52.5163)),
                   1e-6, "resolution scales with 1/cos(latitude)");
+    }
+
+    // Reported ground resolution must come from the raster, not from its zoom
+    // level. fetch_map.py scales the stitched image down to fit a GPU, and a
+    // resolution computed from the zoom alone claims detail the file does not
+    // have - which is the one number that says whether flying lower can show
+    // you anything.
+    {
+        const int zoom = 18, tiles = 8;
+        MapRaster native, scaled;
+        std::string error;
+        // Native: 256 pixels per tile.
+        check(MapRaster::load(writeTestMap(directory, zoom, 1000, 2000, tiles, tiles,
+                                           "(C) TEST", 256),
+                              native, error),
+              "load a native-resolution raster");
+        // Same ground, half the pixels: each pixel must cover twice the ground.
+        check(MapRaster::load(writeTestMap(directory, zoom, 1000, 2000, tiles, tiles,
+                                           "(C) TEST", 128),
+                              scaled, error),
+              "load a downsampled raster");
+
+        // Zoom 18 at Berlin's latitude is about 0.363 m per pixel natively.
+        checkNear(native.metresPerPixel(52.5163), 0.3634, 1e-3,
+                  "native ground resolution at zoom 18 in Berlin");
+        checkNear(scaled.metresPerPixel(52.5163), 2.0 * native.metresPerPixel(52.5163), 1e-9,
+                  "halving the raster doubles the metres each pixel covers");
+        // Both cover the same ground, which is what makes the comparison fair.
+        checkNear(scaled.uvFor(52.5163, 13.3777).x, native.uvFor(52.5163, 13.3777).x, 1e-12,
+                  "scaling the raster does not move its geographic bounds");
     }
 
     // Corrupt input must be refused rather than read as a raster of garbage.

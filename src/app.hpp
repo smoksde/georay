@@ -99,6 +99,8 @@ private:
 
     // --- setup -----------------------------------------------------------
     void buildStructures();
+    // Whether the synthetic landmark towers belong in the scene at all.
+    bool showStructures() const;
     void resetSimulation();
     // Builds the ENU frame and the terrain, from real elevation data when a
     // DEM directory was given and from the synthetic generator otherwise.

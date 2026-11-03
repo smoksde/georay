@@ -33,14 +33,38 @@ bool Scene::initialise() {
     return true;
 }
 
-void Scene::setMapRaster(const MapRaster& map) {
-    if (!map.valid()) return;
+bool Scene::setMapRaster(const MapRaster& map) {
+    if (!map.valid()) return false;
+
+    // A raster larger than the driver's limit does not fail loudly - the
+    // upload is simply dropped and the terrain renders untextured, which
+    // looks like the map file was never found. Check first and say so.
+    GLint max_size = 0;
+    glGetIntegerv(GL_MAX_TEXTURE_SIZE, &max_size);
+    if (map.width() > max_size || map.height() > max_size) {
+        error_ = "map raster is " + std::to_string(map.width()) + "x" +
+                 std::to_string(map.height()) + " but this GPU allows at most " +
+                 std::to_string(max_size) +
+                 "; re-fetch with a smaller --max-pixels";
+        return false;
+    }
+
     if (map_texture_ == 0) glGenTextures(1, &map_texture_);
 
     glBindTexture(GL_TEXTURE_2D, map_texture_);
     glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
     glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB8, map.width(), map.height(), 0, GL_RGB,
                  GL_UNSIGNED_BYTE, map.pixels().data());
+
+    // A raster this size can genuinely exhaust memory on a modest GPU, and
+    // the symptom is again a silently untextured terrain.
+    if (glGetError() == GL_OUT_OF_MEMORY) {
+        glDeleteTextures(1, &map_texture_);
+        map_texture_ = 0;
+        error_ = "the GPU could not hold a " + std::to_string(map.width()) + "x" +
+                 std::to_string(map.height()) + " map texture";
+        return false;
+    }
     // Mipmaps matter here, not as polish: the raster is thousands of pixels
     // across and the 3D view shows the whole thing at once, so without them
     // the minified map is a shimmering mess of aliased street lines.
@@ -62,6 +86,7 @@ void Scene::setMapRaster(const MapRaster& map) {
                         std::min(max_anisotropy, 8.0f));
     }
     glBindTexture(GL_TEXTURE_2D, 0);
+    return true;
 }
 
 void Scene::clearMapRaster() {

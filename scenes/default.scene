@@ -1,0 +1,26 @@
+# The scene georay opens with when you just run it.
+#
+# Points at the Berlin satellite scene. If its data has not been fetched yet,
+# georay says so and falls back to synthetic terrain - so a fresh checkout
+# still runs, but nobody has to discover that real data exists by reading
+# --help.
+#
+#   scripts/fetch_dem.py --origin 52.5163,13.3777 --extent 1200
+#   scripts/fetch_map.py --source esri --origin 52.5163,13.3777 --extent 1200 \
+#       --zoom 18 --max-tiles 800 --out data/berlin_sat.map
+
+name              BERLIN - SATELLITE
+origin            52.5163,13.3777
+extent            1200
+
+dem               data/dem
+map               data/berlin_sat.map
+geoid-separation  39.5
+
+# 400 m rather than a typical survey altitude: the imagery is about 0.6 m per
+# pixel, and at 400 m the camera's own ground sample distance is about 0.44 m,
+# so the two are roughly matched. Flying lower only magnifies map pixels.
+pattern           orbit
+radius            600
+height-agl        400
+speed             20

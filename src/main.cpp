@@ -5,10 +5,12 @@
 
 #include <cstdio>
 #include <cstring>
+#include <fstream>
 #include <iostream>
 #include <string>
 
 #include "app.hpp"
+#include "geo/dem.hpp"
 #include "selftest.hpp"
 
 namespace {
@@ -23,8 +25,10 @@ void printUsage() {
         "  georay --size WxH             window size (default 1600x900)\n"
         "\n"
         "Scene:\n"
-        "  --scene NAME                  load scenes/NAME.scene (try: berlin, munich,\n"
-        "                                zugspitze). Flags after it override its settings.\n"
+        "  --scene NAME                  load scenes/NAME.scene. With no scene and no\n"
+        "                                data flags, scenes/default.scene is used when its\n"
+        "                                data is present. Try: berlin-satellite, berlin,\n"
+        "                                munich, zugspitze. Later flags override a scene.\n"
         "  --origin LAT,LON              scene centre (default 48.137554,11.575497)\n"
         "  --extent METRES               half-extent of the terrain (default 3000)\n"
         "  --map FILE                    map raster from scripts/fetch_map.py\n"
@@ -45,6 +49,18 @@ void printUsage() {
         "  ./build/georay --scene berlin\n"
         "\n"
         "  georay --help                 this message\n";
+}
+
+// Whether a scene's data files are actually on disk. Used to decide if the
+// default scene can be opened, so a checkout that has never run a fetch
+// script still starts rather than erroring on a missing file.
+bool dataPresent(const georay::App::Options& options) {
+    if (!options.map_path.empty() && !std::ifstream(options.map_path).good()) return false;
+    if (options.dem_directory.empty()) return true;
+    // A directory with no tile covering the origin is as good as absent.
+    const std::string tile =
+        georay::HgtTile::tileNameFor(options.origin_latitude_deg, options.origin_longitude_deg);
+    return std::ifstream(options.dem_directory + "/" + tile + ".hgt").good();
 }
 
 // Parses "LAT,LON". Returns false on anything it cannot read, rather than
@@ -149,18 +165,35 @@ int main(int argc, char** argv) {
         return 2;
     }
 
-    // The complaint this answers: running georay bare shows synthetic terrain,
-    // and nothing on screen tells you real data is even possible. Say so once,
-    // here, where someone who has just built it will see it.
-    if (options.dem_directory.empty() && options.map_path.empty()) {
-        // Flushed explicitly: stdout is fully buffered when piped, and this
-        // is precisely the line someone who has just built the thing needs
-        // to see - losing it to a buffer when the window is closed would
-        // defeat the point of printing it.
-        std::cout << "georay: synthetic terrain. For real terrain and maps try "
-                     "--scene berlin\n"
-                     "        (or --help; scenes/ lists what is available).\n"
-                  << std::flush;
+    // With nothing asked for, open the default scene rather than synthetic
+    // terrain. Real data being opt-in behind four flags meant that running
+    // georay showed generated hills and nothing said otherwise - a tool whose
+    // whole point is real coordinates should not open on a fiction.
+    //
+    // Checked for existence first, so a fresh checkout with no data still
+    // runs instead of failing on a file nobody has fetched yet.
+    if (options.dem_directory.empty() && options.map_path.empty() &&
+        options.scene_name.empty()) {
+        const std::string path = std::string(GEORAY_SCENE_DIR) + "/default.scene";
+        std::string error;
+        georay::App::Options candidate = options;
+        if (georay::App::Options::loadScene(path, candidate, error) &&
+            dataPresent(candidate)) {
+            options = candidate;
+        } else {
+            // Flushed explicitly: stdout is fully buffered when piped, and
+            // this is precisely the line someone who has just built the thing
+            // needs to see.
+            std::cout << "georay: no scene data found, using synthetic terrain.\n"
+                         "        For real terrain and satellite imagery:\n"
+                         "          scripts/fetch_dem.py --origin 52.5163,13.3777 "
+                         "--extent 1200\n"
+                         "          scripts/fetch_map.py --source esri "
+                         "--origin 52.5163,13.3777 \\\n"
+                         "              --extent 1200 --zoom 18 --max-tiles 800 "
+                         "--out data/berlin_sat.map\n"
+                      << std::flush;
+        }
     }
 
     georay::App app;

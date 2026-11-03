@@ -108,9 +108,18 @@ glm::dvec2 MapRaster::uvFor(double lat_deg, double lon_deg) const {
 }
 
 double MapRaster::metresPerPixel(double lat_deg) const {
+    if (!valid()) return 0.0;
     // Web Mercator's scale factor is 1/cos(latitude), so a pixel covers less
     // ground the further from the equator it is.
-    return 156543.03392 * std::cos(deg2rad(lat_deg)) / std::pow(2.0, double(zoom_));
+    const double native = 156543.03392 * std::cos(deg2rad(lat_deg)) / std::pow(2.0, double(zoom_));
+
+    // ...and the raster is not necessarily at its tiles' native 256 pixels
+    // each: fetch_map.py scales the stitched image down to fit --max-pixels.
+    // Reporting the zoom level's resolution regardless would claim detail the
+    // file does not contain - which matters here, because this number is what
+    // says whether flying lower can show you anything.
+    const double native_width = double(tiles_x_) * 256.0;
+    return native * (native_width / double(width_));
 }
 
 double MapRaster::northEdge() const {

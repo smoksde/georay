@@ -13,6 +13,10 @@ goes. If the ray misses the feature you aimed at, you can see it.
 
 ![georay](docs/screenshot.png)
 
+*The default scene: satellite imagery of central Berlin on real SRTM
+elevation, orbiting the Brandenburg Gate. The inset is what the UAV camera
+sees; clicking a pixel in it gives the coordinate at the bottom left.*
+
 ## Building
 
 Needs a C++17 compiler, CMake 3.16+, OpenGL, SDL2, GLEW and glm. SDL2, GLEW
@@ -32,33 +36,32 @@ sudo apt install build-essential cmake libsdl2-dev libglew-dev libglm-dev
 
 ## Running
 
-```bash
-./build/georay --scene berlin
-```
-
-That flies a survey orbit over the Brandenburg Gate on real elevation data
-with an OpenStreetMap basemap draped over it — click anywhere in the camera
-view and you get a coordinate you can check on a real map. `scenes/` also has
-`munich` and `zugspitze`. Fetch a scene's data once before first use:
+Fetch the default scene's data once, then just run it:
 
 ```bash
-scripts/fetch_dem.py --origin 52.5163,13.3777 --extent 2000
+scripts/fetch_dem.py --origin 52.5163,13.3777 --extent 1200
 ```
 ```bash
-scripts/fetch_map.py --origin 52.5163,13.3777 --extent 2000 --out data/berlin.map
+scripts/fetch_map.py --source esri --origin 52.5163,13.3777 --extent 1200 --zoom 18 --max-tiles 800 --out data/berlin_sat.map
 ```
-
-![georay over Berlin](docs/screenshot-berlin.png)
-
-*`--scene berlin`: SRTM elevation with an OpenStreetMap basemap draped over it,
-orbiting the Brandenburg Gate at 400 m. The inset is what the UAV camera sees;
-clicking a pixel in it gives the coordinate at the bottom left.*
-
-Without a scene you get synthetic terrain, which needs no files:
-
 ```bash
 ./build/georay
 ```
+
+That opens on satellite imagery of central Berlin, flying a survey orbit over
+the Brandenburg Gate on real SRTM elevation. Click anywhere in the camera view
+and you get a coordinate you can paste into a map and check.
+
+`scenes/` holds the rest — `berlin` (an OpenStreetMap street map instead of
+imagery), `munich`, `zugspitze` — selected with `--scene NAME`:
+
+```bash
+./build/georay --scene zugspitze
+```
+
+With no data fetched at all, georay falls back to synthetic terrain and prints
+what to run. The synthetic generators stay on keys `1`–`4` for comparing a
+geolocation against made-up ground, and `0` returns to the real data.
 
 Other modes:
 
@@ -70,7 +73,7 @@ Other modes:
 | `./build/georay --scene NAME` | Load `scenes/NAME.scene`. Later flags override it. |
 | `./build/georay --origin LAT,LON --extent M` | Where the scene is, and how big. |
 
-## Real maps
+## Real maps and satellite imagery
 
 A map raster draped over the terrain is what makes a flat city worth flying.
 Berlin is 36–40 m above sea level and essentially level, so elevation data
@@ -79,8 +82,26 @@ real streets and a geolocated pixel can be checked against a place you can
 name.
 
 ```bash
-scripts/fetch_map.py --origin 52.5163,13.3777 --extent 2000 --zoom 16 --out data/berlin.map
+scripts/fetch_map.py --source esri --origin 52.5163,13.3777 --extent 1200 --zoom 18 --max-tiles 800 --out data/berlin_sat.map
 ```
+
+`--source esri` fetches satellite imagery, which is what makes the simulated
+camera view look like an actual UAV feed; `--source osm` fetches a street map,
+better for reading street names next to a reported coordinate. `--url` takes
+any XYZ template you are licensed to use.
+
+**Resolution runs out on the map long before it runs out on the camera.** At
+400 m the camera's ground sample distance is about 44 cm; the Berlin imagery
+is about 61 cm per pixel after scaling. Fly lower and the view magnifies
+basemap pixels rather than resolving more ground — at 200 m the camera sees
+about 11 cm per pixel, finer than any public basemap. The HUD shows both
+numbers so the limit is visible rather than mysterious, and the default scene
+flies at 400 m precisely to keep them matched.
+
+`--max-pixels` (default 4096) scales the stitched raster down to something a
+GPU will hold. georay checks `GL_MAX_TEXTURE_SIZE` and reports a raster that
+is too large, because the alternative is an upload that silently does nothing
+and terrain that looks like the map file was never found.
 
 Tiles come from OpenStreetMap by default. Their servers are a donated resource
 with a [usage policy](https://operations.osmfoundation.org/policies/tiles/):
@@ -108,9 +129,13 @@ where they land in the rendered camera view:
 
 | Landmark | Projected to |
 | --- | --- |
-| Brandenburg Gate (52.51628, 13.37771) | the gate monument at the head of Pariser Platz |
-| Holocaust Memorial (52.51390, 13.37859) | its stelae grid |
-| Reichstag (52.51864, 13.37612) | the Reichstag building |
+| Brandenburg Gate (52.51628, 13.37771) | the gate's colonnade at the head of Pariser Platz |
+| Holocaust Memorial (52.51390, 13.37859) | its stelae field |
+| Reichstag (52.51864, 13.37612) | the Reichstag building, glass dome and all |
+
+Done on both the street map and the satellite imagery, which are independent
+rasters at different zooms — so this checks the Mercator registration, not
+just one file.
 
 ## Real elevation data
 
@@ -327,11 +352,16 @@ These are deliberate, and each is where a production pipeline would differ.
   vertical accuracy, and over forest and cities it measures the canopy and
   rooftops rather than the ground. A photogrammetry pipeline that cared would
   use a modern lidar DTM where one exists.
-- **The basemap is a map, not imagery.** At zoom 16 it is 1.45 m per pixel,
-  while the camera's own GSD at 400 m is about 44 cm — so flying lower
+- **No basemap keeps up with a low-flying camera.** At 400 m the camera's own
+  GSD is about 44 cm — so flying lower
   magnifies map pixels rather than resolving more ground. The HUD shows both
-  numbers so the limit is visible. Pointing `--url` at an aerial imagery
-  service you are licensed for fixes this.
+  numbers so the limit is visible. This is inherent to draping a fixed raster,
+  not a flaw to be fixed.
+- **Berlin's own 20 cm orthophotos would beat all of this** and are openly
+  licensed, but they are served over WMS rather than XYZ tiles, and every
+  endpoint name I tried returned 404. Adding WMS to `fetch_map.py` is a
+  contained job — one more URL builder, the same tile grid, the same output —
+  and would roughly triple the usable resolution.
 - **Only SRTM `.hgt` is read.** Copernicus GLO-30 and most national products
   ship as GeoTIFF, which needs a TIFF reader this deliberately does not have.
   The conversion would belong in `scripts/fetch_dem.py`, where the messy

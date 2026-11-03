@@ -264,10 +264,15 @@ bool App::buildWorld() {
     if (!options_.map_path.empty()) {
         std::string error;
         if (MapRaster::load(options_.map_path, map_, error)) {
-            scene_->setMapRaster(map_);
-            std::cout << "georay: map " << map_.width() << "x" << map_.height() << " at zoom "
-                      << map_.zoom() << ", " << map_.metresPerPixel(frame_origin_.latitude_deg)
-                      << " m/pixel, " << map_.attribution() << "\n";
+            if (scene_->setMapRaster(map_)) {
+                std::cout << "georay: map " << map_.width() << "x" << map_.height()
+                          << " at zoom " << map_.zoom() << ", "
+                          << map_.metresPerPixel(frame_origin_.latitude_deg) << " m/pixel, "
+                          << map_.attribution() << "\n";
+            } else {
+                std::cerr << "georay: " << scene_->error() << "\n";
+                map_ = MapRaster();  // so the HUD does not claim a map that is not there
+            }
         } else {
             // Same reasoning as a missing DEM: the tool works without it, so
             // say what is wrong and carry on rather than refusing to start.
@@ -304,6 +309,12 @@ bool App::loadDemTerrain() {
                   << " m orthometric, geoid " << geoid_.description() << "\n";
     }
     return using_dem_;
+}
+
+bool App::showStructures() const {
+    // They exist to give synthetic terrain recognisable features with real
+    // parallax. Real elevation data and real imagery already have both.
+    return !using_dem_ && !map_.valid();
 }
 
 void App::buildStructures() {
@@ -734,8 +745,11 @@ void App::renderWorldView() {
     if (!(show_map_ && scene_->hasMap())) scene_->addGroundGrid(*terrain_, 200.0);
     scene_->addFrameAxes(300.0);
 
-    // Structures, as wireframe boxes standing on the surface.
-    for (const Structure& s : structures_) {
+    // Structures, as wireframe boxes standing on the surface. Only on
+    // synthetic ground: drawn over real imagery they are inventions sitting
+    // among real buildings, and a tool about real coordinates should not put
+    // made-up objects on a real map.
+    for (const Structure& s : showStructures() ? structures_ : std::vector<Structure>{}) {
         const double base = terrain_->sampleHeight(s.position_enu.x, s.position_enu.y);
         const glm::vec3 centre(float(s.position_enu.x), float(s.position_enu.y),
                                float(base + s.height_m * 0.5));
@@ -803,7 +817,7 @@ void App::renderCameraInset() {
 
     PrimitiveBatch& lines = scene_->world();
     if (!(show_map_ && scene_->hasMap())) scene_->addGroundGrid(*terrain_, 200.0);
-    for (const Structure& s : structures_) {
+    for (const Structure& s : showStructures() ? structures_ : std::vector<Structure>{}) {
         const double base = terrain_->sampleHeight(s.position_enu.x, s.position_enu.y);
         const glm::vec3 centre(float(s.position_enu.x), float(s.position_enu.y),
                                float(base + s.height_m * 0.5));

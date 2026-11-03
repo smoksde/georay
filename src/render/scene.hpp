@@ -72,7 +72,10 @@ public:
 
     // Uploads a map raster as the terrain texture. Call before buildTerrain,
     // which bakes the coordinates that index it.
-    void setMapRaster(const MapRaster& map);
+    // Returns false and sets error() when the raster cannot be uploaded -
+    // too large for the driver, or out of memory. Both otherwise present as
+    // untextured terrain, indistinguishable from a missing file.
+    bool setMapRaster(const MapRaster& map);
     void clearMapRaster();
     bool hasMap() const { return map_texture_ != 0; }
 

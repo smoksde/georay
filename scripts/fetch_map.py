@@ -11,6 +11,12 @@ Typical use:
 
     scripts/fetch_map.py --origin 52.5163,13.3777 --extent 2000 --out data/berlin.map
 
+--source esri fetches satellite imagery instead of a street map, which is what
+makes the simulated camera view look like an actual UAV feed. Imagery is also
+where resolution runs out first: a camera at 200 m sees about 11 cm per pixel,
+finer than any public basemap, so the view magnifies map pixels rather than
+resolving more ground. Flying higher is the honest fix.
+
 Tiles come from OpenStreetMap by default. Their tile servers are a donated
 resource with a usage policy (https://operations.osmfoundation.org/policies/tiles/):
 identify yourself, do not download in bulk, cache what you fetch, and credit
@@ -33,8 +39,21 @@ import time
 import urllib.error
 import urllib.request
 
-DEFAULT_URL = "https://tile.openstreetmap.org/{z}/{x}/{y}.png"
-DEFAULT_ATTRIBUTION = "(C) OPENSTREETMAP CONTRIBUTORS"
+# Named sources, so the common cases need no URL typing. The template keys
+# are {z}/{x}/{y}; note that ESRI orders them z/y/x, which is why the
+# placeholders are named rather than positional.
+SOURCES = {
+    "osm": (
+        "https://tile.openstreetmap.org/{z}/{x}/{y}.png",
+        "(C) OPENSTREETMAP CONTRIBUTORS",
+    ),
+    "esri": (
+        "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery"
+        "/MapServer/tile/{z}/{y}/{x}",
+        "IMAGERY (C) ESRI, MAXAR, EARTHSTAR GEOGRAPHICS",
+    ),
+}
+DEFAULT_URL, DEFAULT_ATTRIBUTION = SOURCES["osm"]
 
 # OSM blocks unidentified clients, and is entitled to: a tile server cannot
 # tell a simulation from a scraper unless the client says so.
@@ -66,7 +85,11 @@ def metres_per_pixel(lat, zoom):
 
 
 def fetch_tile(url_template, zoom, x, y, cache_dir):
-    cache_path = os.path.join(cache_dir, "%d_%d_%d.png" % (zoom, x, y))
+    # Keyed by the URL template as well as the coordinates: two sources serve
+    # different pictures of the same tile, and a cache that confused them
+    # would quietly mix a street map into satellite imagery.
+    key = "%08x" % (hash(url_template) & 0xFFFFFFFF)
+    cache_path = os.path.join(cache_dir, "%s_%d_%d_%d.img" % (key, zoom, x, y))
     if os.path.exists(cache_path):
         with open(cache_path, "rb") as handle:
             return handle.read(), True
@@ -91,9 +114,16 @@ def main():
     parser.add_argument("--zoom", type=int, default=16,
                         help="tile zoom level (default 16, about 1.5 m per pixel at mid latitudes)")
     parser.add_argument("--out", default="data/map.bin", help="raster to write")
-    parser.add_argument("--url", default=DEFAULT_URL, help="XYZ tile URL template")
-    parser.add_argument("--attribution", default=DEFAULT_ATTRIBUTION,
-                        help="credit line georay displays while the map is shown")
+    parser.add_argument("--source", choices=sorted(SOURCES), default="osm",
+                        help="named tile source: osm (street map) or esri (satellite imagery)")
+    parser.add_argument("--url", help="XYZ tile URL template, overriding --source")
+    parser.add_argument("--max-pixels", type=int, default=4096,
+                        help="downsample the stitched raster to at most this on its longest "
+                             "side (default 4096). Caps file size and stays inside the GPU's "
+                             "texture limit.")
+    parser.add_argument("--attribution",
+                        help="credit line georay displays while the map is shown; "
+                             "defaults to the one the chosen --source requires")
     parser.add_argument("--cache", default="data/tiles", help="per-tile download cache")
     parser.add_argument("--max-tiles", type=int, default=250,
                         help="refuse runs larger than this (OSM treats 250+ as bulk)")
@@ -101,6 +131,14 @@ def main():
                         help="seconds between requests, to stay a polite client")
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()
+
+    # A source carries its own attribution. Overriding the URL without saying
+    # who to credit would silently keep the previous source's credit line,
+    # which is worse than no credit at all.
+    source_url, source_attribution = SOURCES[args.source]
+    url = args.url or source_url
+    attribution_text = args.attribution or (source_attribution if not args.url
+                                            else "UNKNOWN TILE SOURCE")
 
     try:
         lat_text, lon_text = args.origin.split(",")
@@ -130,7 +168,20 @@ def main():
     print("scene %.5f,%.5f +/- %.0f m at zoom %d" % (lat, lon, args.extent, args.zoom))
     print("  %d x %d tiles = %d, raster %d x %d, %.1f MB on disk"
           % (tiles_x, tiles_y, total, width, height, width * height * 3 / 1e6))
-    print("  ground resolution about %.2f m per pixel" % metres_per_pixel(lat, args.zoom))
+    native_resolution = metres_per_pixel(lat, args.zoom)
+    # Downsampling after stitching rather than fetching a lower zoom: the
+    # extra detail is averaged in rather than thrown away, and the tile grid
+    # still lines up with the Mercator maths georay uses.
+    longest = max(width, height)
+    shrink = 1.0
+    if args.max_pixels > 0 and longest > args.max_pixels:
+        shrink = args.max_pixels / float(longest)
+    print("  ground resolution %.2f m/px native, %.2f m/px after scaling"
+          % (native_resolution, native_resolution / shrink))
+    if shrink < 1.0:
+        print("  raster will be scaled to %d x %d (%.1f MB)"
+              % (int(width * shrink), int(height * shrink),
+                 int(width * shrink) * int(height * shrink) * 3 / 1e6))
 
     if total > args.max_tiles:
         raise SystemExit(
@@ -155,7 +206,7 @@ def main():
     for row, ty in enumerate(range(tile_y0, tile_y1 + 1)):
         for col, tx in enumerate(range(tile_x0, tile_x1 + 1)):
             try:
-                data, from_cache = fetch_tile(args.url, args.zoom, tx, ty, args.cache)
+                data, from_cache = fetch_tile(url, args.zoom, tx, ty, args.cache)
             except urllib.error.HTTPError as error:
                 print("  tile %d/%d HTTP %s" % (tx, ty, error.code))
                 failed += 1
@@ -185,7 +236,11 @@ def main():
     if failed == total:
         raise SystemExit("no tiles were fetched; check --url and your connection")
 
-    attribution = args.attribution.encode("ascii", "replace")[: ATTRIBUTION_BYTES - 1]
+    if shrink < 1.0:
+        canvas = canvas.resize((int(width * shrink), int(height * shrink)), Image.LANCZOS)
+        width, height = canvas.size
+
+    attribution = attribution_text.encode("ascii", "replace")[: ATTRIBUTION_BYTES - 1]
     attribution += b"\0" * (ATTRIBUTION_BYTES - len(attribution))
 
     # georay map raster, little-endian:
