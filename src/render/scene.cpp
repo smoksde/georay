@@ -27,7 +27,7 @@ bool Scene::initialise() {
         }
     }
 
-    text_.initialise();
+    text_.initialise(assetPath("fonts/georay-font.bin"));
     return true;
 }
 

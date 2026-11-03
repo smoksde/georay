@@ -9,9 +9,10 @@ out vec4 frag_colour;
 
 void main() {
     float coverage = texture(u_atlas, v_uv).r;
-    // Drop fully transparent fragments rather than blending them: the HUD is
-    // drawn with the depth test off and alpha blending on, and a zero-alpha
-    // fragment still costs a blend.
-    if (coverage < 0.5) discard;
+    // Drop only what is genuinely empty. The old hard 0.5 cutoff suited a
+    // 1-bit 3x5 font; a rasterised face carries antialiasing in this channel,
+    // and thresholding it would throw away the very thing that makes real
+    // text legible at 11 px.
+    if (coverage < 0.004) discard;
     frag_colour = vec4(v_colour.rgb, v_colour.a * coverage);
 }

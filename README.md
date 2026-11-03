@@ -377,6 +377,32 @@ determine whether a geolocation is worth anything:
   ground plane, with the horizontal distance between the two answers. On the
   mountain terrain this routinely exceeds 100 m.
 
+## Text
+
+The HUD renders JetBrains Mono from a bitmap atlas baked out of the TTF by
+`scripts/bake_font.py`. Baked rather than rasterised at run time for the same
+reason the map tiles are stitched in Python: it keeps FreeType, stb_truetype
+and every other font library out of the build. It also makes the text sharper
+— the atlas is rendered at exactly the pixel sizes the HUD draws at and
+sampled 1:1, so glyphs land on whole pixels instead of being resampled.
+
+Three sizes are baked (11, 15, 22 px): a footnote size, the readout size, and
+a heading size. Anything in between would just be a blurred version of one of
+them, so the renderer takes a named face rather than a scale factor. The
+output is committed, so nobody needs the script to build or run georay — only
+to change the sizes:
+
+```bash
+scripts/bake_font.py assets/fonts/JetBrainsMono-Regular.ttf
+```
+
+A 3×5 font is still compiled in as a fallback. If the atlas is missing, a HUD
+of tiny capitals beats a window with no text, and georay says which font it is
+using so the fallback never looks like a rendering bug.
+
+JetBrains Mono is under the SIL Open Font License 1.1; the licence travels
+with it in `assets/fonts/OFL.txt`.
+
 ## Verification
 
 `--selftest` runs ~8600 numeric checks with no window and no GL, so it runs in
@@ -453,13 +479,14 @@ These are deliberate, and each is where a production pipeline would differ.
 ```
 src/geo/      the geolocation maths, and the DEM/geoid/map readers - no GL
               anywhere in it, and a separate CMake target so it stays that way
-src/gl/       thin OpenGL wrappers: shaders, buffers, an embedded bitmap font
+src/gl/       thin OpenGL wrappers: shaders, buffers, the text renderer
 src/render/   terrain mesh, 3D overlays, the orbit camera
 src/          the application: window, input, HUD, flight simulation, selftest
 shaders/      GLSL
+assets/fonts/ JetBrains Mono, its licence, and the baked atlas
 scenes/       ready-made scenes: berlin-satellite, berlin-mission, berlin,
               munich, zugspitze
 missions/     the same survey plan in both QGC formats
-scripts/      fetch_dem.py and fetch_map.py - the only things here that
-              touch the network
+scripts/      fetch_dem.py and fetch_map.py (the only things here that touch
+              the network), and bake_font.py
 ```

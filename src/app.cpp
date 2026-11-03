@@ -728,6 +728,13 @@ void App::onMouseMotion(const SDL_MouseMotionEvent& event) {
 // Geometry helpers
 // --------------------------------------------------------------------------
 
+float App::answerPanelWidth() const {
+    // Two columns of thirty characters, which is what the widest row needs.
+    // Derived from the font rather than fixed, so the bottom row still fits
+    // if the baked sizes change.
+    return 60.0f * scene_->text().advance(TextRenderer::kNormal) + 30.0f;
+}
+
 bool App::cameraPaneVisible(int index) const {
     // Enlarging one pane hides the other: two panes at half the window each
     // would not fit, and overlapping them would hide the readouts.
@@ -742,10 +749,12 @@ glm::vec4 App::cameraRect(int index) const {
     float h = float(height_) * (large_inset_ ? 0.50f : 0.28f);
     float w = h * aspect;
 
-    // Never let the panes eat the window: on a narrow window the width is
-    // the binding constraint, not the height.
+    // Never let the panes eat the window, and never let them run over the
+    // geolocation readout they share the bottom row with: on a narrow window
+    // the width is the binding constraint, not the height.
     const int panes = large_inset_ ? 1 : kCameraPanes;
-    const float available = float(width_) - 2.0f * margin - gap * float(panes - 1);
+    const float available = float(width_) - answerPanelWidth() - 2.0f * margin -
+                            gap * float(panes);
     if (w * float(panes) > available) {
         w = available / float(panes);
         h = w / aspect;
@@ -984,26 +993,39 @@ void App::renderHud() {
     PrimitiveBatch& lines = scene_->overlay();
     TextRenderer& text = scene_->text();
 
-    const float s = 2.0f;             // glyph scale: 6x10 pixels per character
-    const float line_h = TextRenderer::lineHeight(s);
+    // Named faces rather than a scale multiplier: the sizes are baked, and a
+    // caller that scaled one of them would just be blurring it.
+    //
+    // Two sizes in play. The reference panels - platform, camera, simulation -
+    // are dense and read at a glance, so they use the small face; the
+    // geolocation answer is the thing you actually read, so it gets the
+    // larger one. Every position below is derived from the real line heights
+    // rather than from constants, because the baked faces are whatever
+    // scripts/bake_font.py produced and hard-coded offsets would collide the
+    // moment anyone changes a size.
+    const int s = TextRenderer::kSmall;
+    const int answer_face = TextRenderer::kNormal;
+    const float line_h = text.lineHeight(s);
+    const float answer_line_h = text.lineHeight(answer_face);
     const float pad = 10.0f;
 
     // A small layout helper, so panels line up without a pile of magic
     // offsets at every call site.
     struct Cursor {
         TextRenderer& text;
-        float x, y, scale, line_h;
+        float x, y;
+        int face;
+        float line_h;
         void row(const std::string& label, const std::string& value,
                  const glm::vec4& value_colour) {
-            text.add(label, {x, y}, scale, colours::text_label);
+            text.add(label, {x, y}, face, colours::text_label);
             // Values at a fixed column, so a changing number does not make
             // the whole row jitter.
-            text.add(value, {x + 15.0f * TextRenderer::glyphAdvance(scale), y}, scale,
-                     value_colour);
+            text.add(value, {x + 15.0f * text.advance(face), y}, face, value_colour);
             y += line_h;
         }
         void line(const std::string& s, const glm::vec4& colour) {
-            text.add(s, {x, y}, scale, colour);
+            text.add(s, {x, y}, face, colour);
             y += line_h;
         }
         void blank() { y += line_h * 0.45f; }
@@ -1019,12 +1041,17 @@ void App::renderHud() {
         lines.addSegment({x, y + h, 0}, {x, y, 0}, colours::panel_edge);
     };
 
+    // A running cursor down the left column, so panels stack from whatever
+    // the one above actually needed.
+    float column_y = pad;
+    const float column_w = 20.0f * text.advance(s) + 15.0f * text.advance(s);
+
     // ---- platform and camera state ------------------------------------
     {
-        const float w = 400.0f;
+        const float w = column_w;
         const float h = 20.0f * line_h + 2.0f * pad;
-        panel(pad, pad, w, h);
-        Cursor c{text, pad * 2.0f, pad * 2.0f, s, line_h};
+        panel(pad, column_y, w, h);
+        Cursor c{text, pad * 2.0f, column_y + pad, s, line_h};
 
         c.line("PLATFORM", colours::text_primary);
         c.row("LAT", formatLatitude(uav_.position.latitude_deg), colours::text_value);
@@ -1069,19 +1096,19 @@ void App::renderHud() {
             // demonstration and a trap.
             c.row("DISTORTION", "ON - VIEW IS UNDISTORTED", colours::text_warn);
         }
+        column_y += h + pad;
     }
 
     // ---- simulation state ---------------------------------------------
     {
-        const float w = 400.0f;
+        const float w = column_w;
         float rows = 9.0f;
         if (using_dem_) rows += dem_report_.posts_filled > 0 ? 2.0f : 1.0f;
         if (maps_[0].valid() || maps_[1].valid()) rows += mapVisible() ? 2.0f : 1.0f;
         if (has_mission_) rows += 3.0f;
         const float h = rows * line_h + 2.0f * pad;
-        const float y = pad + 20.0f * line_h + 2.0f * pad + pad;
-        panel(pad, y, w, h);
-        Cursor c{text, pad * 2.0f, y + pad, s, line_h};
+        panel(pad, column_y, w, h);
+        Cursor c{text, pad * 2.0f, column_y + pad, s, line_h};
 
         c.line(options_.scene_name.empty() ? std::string("SIMULATION") : options_.scene_name,
                colours::text_primary);
@@ -1138,87 +1165,88 @@ void App::renderHud() {
                   colours::text_value);
         }
         c.row("FPS", num(fps_, 0), colours::text_dim);
+        column_y += h + pad;
     }
 
     // ---- the answer ----------------------------------------------------
+    //
+    // Laid out in two columns: one deep column of fifteen rows would push the
+    // panel past the camera panes, and this is the readout that has to stay
+    // on screen.
     {
-        const float w = 560.0f;
-        float rows = 16.0f;
-        if (have_pick_ && pick_result_.valid && show_flat_comparison_ &&
-            pick_flat_result_.valid) {
-            rows += 3.0f;
-        }
-        const float h = rows * line_h + 2.0f * pad;
+        const float col_w = 30.0f * text.advance(answer_face);
+        const float w = answerPanelWidth();
+        const float h = 11.0f * answer_line_h + 2.0f * pad;
         const float x = pad;
         const float y = float(height_) - h - pad;
         panel(x, y, w, h);
-        Cursor c{text, x + pad, y + pad, s, line_h};
 
+        Cursor left{text, x + pad, y + pad, answer_face, answer_line_h};
         const GeolocateResult& r = have_pick_ ? pick_result_ : hover_result_;
         const bool showing_pick = have_pick_;
-        c.line(showing_pick ? "GEOLOCATION - PICKED PIXEL" : "GEOLOCATION - CURSOR",
-               colours::text_primary);
+        left.line(showing_pick ? "GEOLOCATION - PICKED PIXEL" : "GEOLOCATION - CURSOR",
+                  colours::text_primary);
 
         if (!have_pick_ && !hover_valid_) {
-            c.blank();
-            c.line("MOVE THE CURSOR OVER THE CAMERA VIEW", colours::text_dim);
-            c.line("AND CLICK A PIXEL TO GEOLOCATE IT.", colours::text_dim);
+            left.blank();
+            left.line("MOVE THE CURSOR OVER THE SIMULATED CAMERA", colours::text_dim);
+            left.line("AND CLICK A PIXEL TO GEOLOCATE IT.", colours::text_dim);
         } else if (!r.valid) {
-            c.blank();
+            left.blank();
             if (r.pointed_at_sky) {
-                c.line("NO GROUND: RAY IS ABOVE THE HORIZON", colours::text_warn);
-                c.line("TILT THE GIMBAL DOWN (ARROW KEYS)", colours::text_dim);
+                left.line("NO GROUND: RAY IS ABOVE THE HORIZON", colours::text_warn);
+                left.line("TILT THE GIMBAL DOWN (ARROW KEYS)", colours::text_dim);
             } else if (r.left_coverage) {
-                c.line("NO GROUND: RAY LEFT THE TERRAIN TILE", colours::text_warn);
-                c.line("THIS IS MISSING DATA, NOT A RESULT.", colours::text_dim);
+                left.line("NO GROUND: RAY LEFT THE TERRAIN TILE", colours::text_warn);
+                left.line("THIS IS MISSING DATA, NOT A RESULT.", colours::text_dim);
             } else {
-                c.line("NO GROUND FOUND ALONG THE RAY", colours::text_warn);
+                left.line("NO GROUND FOUND ALONG THE RAY", colours::text_warn);
             }
         } else {
             const glm::dvec2 px = showing_pick ? pick_pixel_ : hover_pixel_;
-            c.row("PIXEL", num(px.x, 1) + " , " + num(px.y, 1), colours::text_dim);
-            c.row("LATITUDE", formatLatitude(r.ground_geodetic.latitude_deg),
-                  colours::text_value);
-            c.row("LONGITUDE", formatLongitude(r.ground_geodetic.longitude_deg),
-                  colours::text_value);
-            c.row("GROUND ELEV", num(r.ground_geodetic.altitude_m, 2) + " M",
-                  colours::text_value);
-            c.row("ENU E/N", num(r.ground_enu.x, 1) + " / " + num(r.ground_enu.y, 1),
-                  colours::text_dim);
-            c.row("SLANT RANGE", formatDistance(r.slant_range_m), colours::text_value);
-            c.row("GROUND RANGE", formatDistance(r.ground_range_m), colours::text_value);
-            c.row("DEPRESSION", num(r.depression_angle_deg, 1) + "^", colours::text_value);
-            c.row("PIXEL GSD", num(r.gsd_m * 100.0, 1) + " CM", colours::text_value);
+            left.row("PIXEL", num(px.x, 1) + " , " + num(px.y, 1), colours::text_dim);
+            left.row("LATITUDE", formatLatitude(r.ground_geodetic.latitude_deg),
+                     colours::text_value);
+            left.row("LONGITUDE", formatLongitude(r.ground_geodetic.longitude_deg),
+                     colours::text_value);
+            left.row("GROUND ELEV", num(r.ground_geodetic.altitude_m, 2) + " M",
+                     colours::text_value);
+            left.row("ENU E/N", num(r.ground_enu.x, 1) + " / " + num(r.ground_enu.y, 1),
+                     colours::text_dim);
+            left.row("SLANT RANGE", formatDistance(r.slant_range_m), colours::text_value);
+            left.row("GROUND RANGE", formatDistance(r.ground_range_m), colours::text_value);
+            left.row("DEPRESSION", num(r.depression_angle_deg, 1) + "^", colours::text_value);
+            left.row("PIXEL GSD", num(r.gsd_m * 100.0, 1) + " CM", colours::text_value);
 
             if (showing_pick) {
-                c.blank();
+                Cursor right{text, x + pad + col_w, y + pad + answer_line_h, answer_face,
+                             answer_line_h};
                 // A round trip that does not close means the forward and
-                // inverse models disagree, and every number above is suspect.
+                // inverse models disagree, and every number here is suspect.
                 const bool clean = pick_reprojection_px_ < 0.05;
-                c.row("REPROJECTION", num(pick_reprojection_px_, 4) + " PX",
-                      clean ? colours::text_good : colours::text_warn);
-                c.row("D/TILT", num(sensitivity_tilt_m_per_deg_, 1) + " M PER DEG",
-                      colours::text_value);
-                c.row("D/HEADING", num(sensitivity_yaw_m_per_deg_, 1) + " M PER DEG",
-                      colours::text_value);
-                c.row("D/ALTITUDE", num(sensitivity_alt_m_per_m_, 2) + " M PER M",
-                      colours::text_value);
+                right.row("REPROJECTION", num(pick_reprojection_px_, 4) + " PX",
+                          clean ? colours::text_good : colours::text_warn);
+                right.row("D/TILT", num(sensitivity_tilt_m_per_deg_, 1) + " M PER DEG",
+                          colours::text_value);
+                right.row("D/HEADING", num(sensitivity_yaw_m_per_deg_, 1) + " M PER DEG",
+                          colours::text_value);
+                right.row("D/ALTITUDE", num(sensitivity_alt_m_per_m_, 2) + " M PER M",
+                          colours::text_value);
 
-                // The flat-earth comparison lives here rather than in its own
-                // panel: it is a property of this same picked pixel, and a
-                // separate panel had nowhere left to go once there were two
-                // camera panes.
+                // The flat-earth comparison belongs with the pixel it is
+                // about, not in a panel of its own - there is nowhere left
+                // for one once there are two camera panes.
                 if (show_flat_comparison_ && pick_flat_result_.valid) {
-                    c.blank();
+                    right.blank();
                     const double error =
                         glm::length(glm::dvec2(pick_result_.ground_enu) -
                                     glm::dvec2(pick_flat_result_.ground_enu));
-                    c.row("FLAT-EARTH", formatDistance(error) + " OFF",
-                          error > 5.0 ? colours::text_warn : colours::text_good);
-                    c.row("  ITS ELEV", num(pick_flat_result_.ground_geodetic.altitude_m, 1) +
-                                            " M VS " +
-                                            num(pick_result_.ground_geodetic.altitude_m, 1),
-                          colours::text_dim);
+                    right.row("FLAT-EARTH", formatDistance(error) + " OFF",
+                              error > 5.0 ? colours::text_warn : colours::text_good);
+                    right.row("  ITS ELEV",
+                              num(pick_flat_result_.ground_geodetic.altitude_m, 1) + " M VS " +
+                                  num(pick_result_.ground_geodetic.altitude_m, 1),
+                              colours::text_dim);
                 }
             }
         }
@@ -1263,14 +1291,15 @@ void App::renderHud() {
         const std::string status = "NO SIGNAL";
         const std::string note = "AWAITING STREAM FROM AIRCRAFT";
         text.add(title, {rect.x + 8.0f, rect.y + 8.0f}, s, colours::text_dim);
+        const int big = TextRenderer::kLarge;
         text.add(status,
-                 {rect.x + (rect.z - TextRenderer::textWidth(status, s)) * 0.5f,
-                  rect.y + rect.w * 0.5f - 5.0f * s},
-                 s, colours::text_warn);
+                 {rect.x + (rect.z - text.textWidth(status, big)) * 0.5f,
+                  rect.y + rect.w * 0.5f - text.lineHeight(big) * 0.5f},
+                 big, colours::text_warn);
         text.add(note,
-                 {rect.x + (rect.z - TextRenderer::textWidth(note, 1.0f)) * 0.5f,
-                  rect.y + rect.w * 0.5f + 7.0f * s},
-                 1.0f, colours::text_dim);
+                 {rect.x + (rect.z - text.textWidth(note, TextRenderer::kSmall)) * 0.5f,
+                  rect.y + rect.w * 0.5f + line_h * 1.4f},
+                 TextRenderer::kSmall, colours::text_dim);
     }
 
     // ---- the simulated camera's frame and reticle ----------------------
@@ -1315,8 +1344,8 @@ void App::renderHud() {
         // terrain is dark and light text reads fine; with one, the ground
         // underneath can be white paper, and the label disappears.
         auto labelled = [&](const std::string& content, float y, const glm::vec4& colour) {
-            const float width = TextRenderer::textWidth(content, s) + 10.0f;
-            fills.addQuad({rect.x + 2.0f, y - 3.0f}, {width, 5.0f * s + 6.0f},
+            const float width = text.textWidth(content, s) + 10.0f;
+            fills.addQuad({rect.x + 2.0f, y - 3.0f}, {width, line_h + 6.0f},
                           glm::vec4(0.04f, 0.06f, 0.09f, 0.82f));
             text.add(content, {rect.x + 7.0f, y}, s, colour);
         };
@@ -1329,7 +1358,7 @@ void App::renderHud() {
             const std::string live = formatLatitude(hover_result_.ground_geodetic.latitude_deg) +
                                      "  " +
                                      formatLongitude(hover_result_.ground_geodetic.longitude_deg);
-            labelled(live, rect.y + rect.w - 8.0f - 5.0f * s, colours::text_value);
+            labelled(live, rect.y + rect.w - 8.0f - line_h, colours::text_value);
         }
 
         // Map credit. Not decoration: OpenStreetMap's tiles are CC-BY-SA and
@@ -1339,12 +1368,16 @@ void App::renderHud() {
         // way but not hidden.
         if (mapVisible() && !maps_[map_layer_].attribution().empty()) {
             const std::string credit = maps_[map_layer_].attribution();
-            const float width = TextRenderer::textWidth(credit, 1.0f) + 8.0f;
-            const float x = float(width_) - width - 4.0f;
-            const float y = float(height_) - 5.0f - 4.0f;
-            fills.addQuad({x - 2.0f, y - 2.0f}, {width, 9.0f},
-                          glm::vec4(0.04f, 0.06f, 0.09f, 0.7f));
-            text.add(credit, {x + 2.0f, y}, 1.0f, colours::text_dim);
+            const float credit_h = text.lineHeight(TextRenderer::kSmall);
+            const float width = text.textWidth(credit, TextRenderer::kSmall) + 10.0f;
+            // Just above the camera panes rather than along the bottom edge,
+            // where it was being clipped by the window and overlapped by the
+            // live pane. A credit line that cannot be read credits nobody.
+            const float x = float(width_) - width - 16.0f;
+            const float y = cameraRect(kLiveCamera).y - credit_h - 6.0f;
+            fills.addQuad({x - 3.0f, y - 3.0f}, {width + 6.0f, credit_h + 6.0f},
+                          glm::vec4(0.04f, 0.06f, 0.09f, 0.75f));
+            text.add(credit, {x + 2.0f, y}, TextRenderer::kSmall, colours::text_dim);
         }
     }
 
@@ -1388,10 +1421,10 @@ void App::renderHud() {
         // Same glyph scale as the rest of the HUD: at scale 1 a 3x5 font is
         // three pixels wide and unreadable, which makes a help panel worse
         // than none.
-        const float help_scale = s;
-        const float help_line = TextRenderer::lineHeight(help_scale);
+        const int help_scale = s;
+        const float help_line = text.lineHeight(help_scale);
         float w = 0.0f;
-        for (const char* row : keys) w = std::max(w, TextRenderer::textWidth(row, help_scale));
+        for (const char* row : keys) w = std::max(w, text.textWidth(row, help_scale));
         w += 2.0f * pad;
         const float h = rows * help_line + 2.0f * pad;
         // Top-right: the camera inset owns the bottom-right corner, and the

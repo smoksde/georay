@@ -142,6 +142,8 @@ private:
     // is in window pixels, y down from the top.
     enum CameraPane { kSimulatedCamera = 0, kLiveCamera = 1, kCameraPanes = 2 };
     glm::vec4 cameraRect(int index) const;
+    // Width of the bottom-left readout, which the camera panes must clear.
+    float answerPanelWidth() const;
     bool cameraPaneVisible(int index) const;
     // Window pixel -> camera image pixel. Returns false when the point is
     // outside the inset.

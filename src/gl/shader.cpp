@@ -8,6 +8,9 @@
 #ifndef GEORAY_SHADER_DIR
 #define GEORAY_SHADER_DIR "shaders"
 #endif
+#ifndef GEORAY_ASSET_DIR
+#define GEORAY_ASSET_DIR "assets"
+#endif
 
 namespace georay {
 namespace {
@@ -25,6 +28,10 @@ bool readFile(const std::string& path, std::string& out) {
 
 std::string shaderPath(const std::string& filename) {
     return std::string(GEORAY_SHADER_DIR) + "/" + filename;
+}
+
+std::string assetPath(const std::string& filename) {
+    return std::string(GEORAY_ASSET_DIR) + "/" + filename;
 }
 
 GLuint Shader::compile(const std::string& source, GLenum type, std::string& error_out) {

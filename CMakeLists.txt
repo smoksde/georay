@@ -122,7 +122,8 @@ target_link_libraries(georay
 # still finds them.
 target_compile_definitions(georay PRIVATE
     GEORAY_SHADER_DIR="${CMAKE_CURRENT_SOURCE_DIR}/shaders"
-    GEORAY_SCENE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/scenes")
+    GEORAY_SCENE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/scenes"
+    GEORAY_ASSET_DIR="${CMAKE_CURRENT_SOURCE_DIR}/assets")
 
 if(WIN32)
     target_link_libraries(georay PRIVATE SDL2main)

@@ -49,5 +49,7 @@ private:
 
 // Absolute path to a file in the project's shaders/ directory.
 std::string shaderPath(const std::string& filename);
+// ...and in assets/, which holds the baked font atlas.
+std::string assetPath(const std::string& filename);
 
 }  // namespace georay

@@ -72,6 +72,17 @@ still a parser reading files from disk, so keep it failing rather than
 misbehaving: bounded depth and length, checked conversions, no partially-built
 values on error.
 
+## Text rendering
+
+The HUD font is a bitmap atlas baked from a TTF by `scripts/bake_font.py` and
+committed. Keep it that way: it is what lets georay draw a real programming
+font without linking a font library, and baking at the exact draw sizes is
+what keeps it crisp.
+
+Faces are named sizes, not scale factors - scaling a baked face just blurs it.
+Lay HUD panels out from `TextRenderer::lineHeight()` and `advance()` rather
+than from constants; hard-coded offsets collided the moment the font changed.
+
 ## Process
 
 - Verify every change: clean rebuild + `./build/georay --selftest` + a runtime
