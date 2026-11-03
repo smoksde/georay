@@ -37,6 +37,9 @@ void SurfaceMesh::upload(const std::vector<SurfaceVertex>& vertices,
     glEnableVertexAttribArray(2);
     glVertexAttribPointer(2, 2, GL_FLOAT, GL_FALSE, sizeof(SurfaceVertex),
                           (void*)offsetof(SurfaceVertex, map_uv));
+    glEnableVertexAttribArray(3);
+    glVertexAttribPointer(3, 2, GL_FLOAT, GL_FALSE, sizeof(SurfaceVertex),
+                          (void*)(offsetof(SurfaceVertex, map_uv) + sizeof(glm::vec2)));
 
     glBindVertexArray(0);
     index_count_ = GLsizei(indices.size());

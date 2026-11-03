@@ -6,13 +6,16 @@
 #   scripts/fetch_dem.py --origin 52.5163,13.3777 --extent 1200
 #   scripts/fetch_map.py --source esri --origin 52.5163,13.3777 --extent 1200 \
 #       --zoom 18 --max-tiles 800 --out data/berlin_sat.map
+#   scripts/fetch_map.py --source basemapde --origin 52.5163,13.3777 --extent 1200 \
+#       --zoom 18 --max-tiles 800 --out data/berlin_map.map
 
 name              BERLIN - SATELLITE
 origin            52.5163,13.3777
 extent            1200
 
 dem               data/dem
-map               data/berlin_sat.map
+map-satellite     data/berlin_sat.map
+map-street        data/berlin_map.map
 geoid-separation  39.5
 
 # 400 m rather than a typical survey altitude: the imagery is about 0.6 m per

@@ -90,7 +90,9 @@ add_library(georay_geo STATIC
     src/geo/camera_model.cpp
     src/geo/dem.cpp
     src/geo/geoid.cpp
+    src/geo/json.cpp
     src/geo/maptile.cpp
+    src/geo/mission.cpp
     src/geo/pose.cpp
     src/geo/terrain.cpp
     src/geo/geolocate.cpp

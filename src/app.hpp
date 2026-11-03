@@ -22,6 +22,7 @@
 #include "geo/dem.hpp"
 #include "geo/geoid.hpp"
 #include "geo/maptile.hpp"
+#include "geo/mission.hpp"
 #include "geo/geolocate.hpp"
 #include "geo/pose.hpp"
 #include "geo/terrain.hpp"
@@ -53,8 +54,17 @@ public:
         double geoid_separation_m = 0.0;
         bool geoid_separation_given = false;
 
-        // A map raster from scripts/fetch_map.py, draped over the terrain.
-        std::string map_path;
+        // Map rasters from scripts/fetch_map.py, draped over the terrain and
+        // switchable at runtime: satellite imagery and a drawn street map of
+        // the same ground.
+        std::string satellite_map_path;
+        std::string street_map_path;
+
+        // A QGroundControl .plan or a QGC WPL .waypoints list to fly.
+        std::string mission_path;
+
+        // Which layer to start on: "satellite", "street" or "off".
+        std::string map_mode = "satellite";
 
         double origin_latitude_deg = 48.137554;
         double origin_longitude_deg = 11.575497;
@@ -101,11 +111,17 @@ private:
     void buildStructures();
     // Whether the synthetic landmark towers belong in the scene at all.
     bool showStructures() const;
+    bool mapVisible() const;
+    bool mapIsImagery() const;
+    const char* mapLayerName() const;
     void resetSimulation();
     // Builds the ENU frame and the terrain, from real elevation data when a
     // DEM directory was given and from the synthetic generator otherwise.
     bool buildWorld();
     bool loadDemTerrain();
+    bool loadMissionFile(const std::string& path);
+    // Rebuilds the surface mesh with whatever map layers are loaded.
+    void rebuildTerrainMesh();
 
     // --- frame -----------------------------------------------------------
     void handleEvents();
@@ -116,12 +132,17 @@ private:
     void render();
 
     void renderWorldView();
-    void renderCameraInset();
+    void renderSimulatedCamera();
+    void renderLiveCameraPlaceholder();
     void renderHud();
 
     // --- geometry helpers ------------------------------------------------
-    // The inset's rectangle in window pixels, y down from the top.
-    glm::vec4 insetRect() const;
+    // There are two camera panes: the simulated view, and a placeholder for
+    // a live feed from a real aircraft. `index` selects which; the rectangle
+    // is in window pixels, y down from the top.
+    enum CameraPane { kSimulatedCamera = 0, kLiveCamera = 1, kCameraPanes = 2 };
+    glm::vec4 cameraRect(int index) const;
+    bool cameraPaneVisible(int index) const;
     // Window pixel -> camera image pixel. Returns false when the point is
     // outside the inset.
     bool windowToImagePixel(int x, int y, glm::dvec2& out) const;
@@ -150,13 +171,19 @@ private:
     EnuFrame frame_;
 
     std::unique_ptr<Terrain> terrain_;
+    Mission mission_;
+    bool has_mission_ = false;
     // Only populated when real elevation data was requested. Kept alive
     // because the terrain can be switched back and forth between the DEM and
     // the synthetic generators at runtime, and re-reading the tiles each time
     // would stall the frame.
     std::unique_ptr<DemSource> dem_;
     GeoidModel geoid_;
-    MapRaster map_;
+    // Layer 0 is satellite imagery, layer 1 a drawn street map. Both are
+    // kept resident so switching is instant; a 50 MB raster each is cheaper
+    // than re-reading and re-uploading on a keypress.
+    MapRaster maps_[2];
+    bool map_is_imagery_[2] = {true, false};
     Terrain::DemLoadReport dem_report_;
     bool using_dem_ = false;
     // A flat ground model at the frame origin's elevation, used only to
@@ -198,7 +225,11 @@ private:
     bool show_contours_ = true;
     bool show_flat_comparison_ = true;
     bool large_inset_ = false;
-    bool show_map_ = true;
+    // Which map layer is draped, or -1 for bare terrain. M cycles through
+    // whichever layers actually loaded.
+    int map_layer_ = 0;
+    // Which camera pane V enlarges, and TAB switches.
+    int focused_camera_ = kSimulatedCamera;
     bool follow_aircraft_ = true;
     bool dragging_orbit_ = false;
     bool dragging_pan_ = false;

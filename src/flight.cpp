@@ -16,6 +16,7 @@ const char* FlightSimulator::patternName(Pattern p) {
         case Pattern::Orbit: return "ORBIT";
         case Pattern::Lawnmower: return "LAWNMOWER";
         case Pattern::Transit: return "TRANSIT";
+        case Pattern::Mission: return "MISSION";
     }
     return "?";
 }
@@ -27,6 +28,33 @@ const char* FlightSimulator::gimbalModeName(GimbalMode m) {
         case GimbalMode::TrackPoint: return "TRACK POINT";
     }
     return "?";
+}
+
+void FlightSimulator::setMission(const georay::Mission& mission, const Terrain& terrain,
+                                 const EnuFrame& frame, double geoid_separation_m) {
+    mission_ = mission;
+    route_.clear();
+    leg_start_m_.clear();
+    route_length_m_ = 0.0;
+    along_route_m_ = 0.0;
+    current_leg_ = 0;
+
+    for (const Waypoint& item : mission.navigationItems()) {
+        const Geodetic resolved =
+            mission.resolveAltitude(item, terrain, frame, geoid_separation_m);
+        route_.push_back(frame.fromGeodetic(resolved));
+    }
+
+    // Cumulative distance along the route, so a position can be found by
+    // walking a single scalar rather than by integrating per frame - which
+    // would drift, and would make the flight depend on the frame rate.
+    leg_start_m_.push_back(0.0);
+    for (size_t i = 1; i < route_.size(); ++i) {
+        route_length_m_ += glm::length(route_[i] - route_[i - 1]);
+        leg_start_m_.push_back(route_length_m_);
+    }
+
+    if (mission.cruise_speed_mps > 0.5) speed_mps_ = mission.cruise_speed_mps;
 }
 
 void FlightSimulator::configure(Pattern pattern, const glm::dvec2& centre_enu) {
@@ -109,6 +137,60 @@ void FlightSimulator::update(double dt, const Terrain& terrain, const EnuFrame& 
             break;
         }
 
+        case Pattern::Mission: {
+            if (route_.size() < 2) {
+                // A plan with one usable waypoint is a position, not a
+                // route. Hold over it rather than dividing by a zero length.
+                if (!route_.empty()) position_enu = glm::dvec2(route_.front());
+                break;
+            }
+            along_route_m_ += speed_mps_ * dt;
+            // Loop rather than stop at the end: the point is to watch the
+            // geolocation work along the whole plan, repeatedly.
+            if (route_length_m_ > 1e-6) {
+                along_route_m_ = std::fmod(along_route_m_, route_length_m_);
+                if (along_route_m_ < 0.0) along_route_m_ += route_length_m_;
+            }
+
+            // Find the leg containing this distance.
+            size_t leg = 0;
+            while (leg + 2 < route_.size() && leg_start_m_[leg + 1] <= along_route_m_) ++leg;
+            current_leg_ = int(leg);
+
+            const glm::dvec3 a = route_[leg];
+            const glm::dvec3 b = route_[leg + 1];
+            const double leg_length = glm::length(b - a);
+            const double t = leg_length > 1e-6
+                                 ? (along_route_m_ - leg_start_m_[leg]) / leg_length
+                                 : 0.0;
+            const glm::dvec3 here = a + (b - a) * glm::clamp(t, 0.0, 1.0);
+
+            position_enu = glm::dvec2(here);
+            mission_altitude_enu_ = here.z;
+            const glm::dvec3 along = b - a;
+            velocity_enu = glm::length(glm::dvec2(along)) > 1e-9
+                               ? glm::normalize(glm::dvec2(along)) * speed_mps_
+                               : glm::dvec2(0.0);
+
+            // Bank into the corner at each waypoint, approximated from the
+            // heading change across the next one. Without it the aircraft
+            // pivots flat, and a gimbal that has to work against bank is half
+            // the reason this simulation exists.
+            if (leg + 2 < route_.size()) {
+                const glm::dvec2 next = glm::dvec2(route_[leg + 2] - b);
+                const glm::dvec2 current = glm::dvec2(along);
+                if (glm::length(next) > 1e-6 && glm::length(current) > 1e-6) {
+                    const glm::dvec2 u = glm::normalize(current), v = glm::normalize(next);
+                    const double turn = std::atan2(u.x * v.y - u.y * v.x, glm::dot(u, v));
+                    // Spread the turn over the last 80 m of the leg.
+                    const double distance_to_corner = leg_length * (1.0 - t);
+                    const double blend = glm::clamp(1.0 - distance_to_corner / 80.0, 0.0, 1.0);
+                    turn_rate = -turn * blend * speed_mps_ / 80.0;
+                }
+            }
+            break;
+        }
+
         case Pattern::Transit: {
             const double heading = deg2rad(transit_heading_deg_);
             const glm::dvec2 forward(std::sin(heading), std::cos(heading));
@@ -129,8 +211,16 @@ void FlightSimulator::update(double dt, const Terrain& terrain, const EnuFrame& 
     // ground below it, not a constant altitude. That keeps the simulated
     // imagery at a usable scale over relief, and it is what an AGL-holding
     // autopilot does.
-    const double ground = terrain.sampleHeight(position_enu.x, position_enu.y);
-    const glm::dvec3 enu(position_enu.x, position_enu.y, ground + height_agl_m_);
+    // A mission carries its own altitudes, already resolved against whatever
+    // frame each waypoint was written in; overriding them with the AGL knob
+    // would discard the one thing the plan actually specifies.
+    glm::dvec3 enu;
+    if (pattern_ == Pattern::Mission && !route_.empty()) {
+        enu = glm::dvec3(position_enu.x, position_enu.y, mission_altitude_enu_);
+    } else {
+        const double ground = terrain.sampleHeight(position_enu.x, position_enu.y);
+        enu = glm::dvec3(position_enu.x, position_enu.y, ground + height_agl_m_);
+    }
 
     state.position = frame.toGeodetic(enu);
     state.attitude = attitudeFor(velocity_enu, turn_rate);

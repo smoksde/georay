@@ -13,6 +13,7 @@
 
 #include <string>
 
+#include "geo/mission.hpp"
 #include "geo/pose.hpp"
 #include "geo/terrain.hpp"
 
@@ -24,7 +25,8 @@ public:
         Hold,       // stationary hover: the baseline for reading the HUD
         Orbit,      // circle a fixed point, which is the strongest pose test
         Lawnmower,  // parallel survey lines, as a mapping sortie actually flies
-        Transit     // straight and level on a constant heading
+        Transit,    // straight and level on a constant heading
+        Mission     // fly a loaded QGroundControl / Pixhawk plan
     };
 
     enum class GimbalMode {
@@ -57,7 +59,21 @@ public:
     void setHeightAboveGround(double metres);
     double heightAboveGround() const { return height_agl_m_; }
 
-    void reset() { elapsed_s_ = 0.0; }
+    // Loads a flight plan for Pattern::Mission. The waypoints' altitudes are
+    // resolved against the terrain here, once, rather than every frame: the
+    // frame semantics need the ground model, and re-deriving them per frame
+    // would make the aircraft's altitude depend on where it currently is.
+    void setMission(const georay::Mission& mission, const Terrain& terrain,
+                    const EnuFrame& frame, double geoid_separation_m);
+    const georay::Mission& mission() const { return mission_; }
+    bool hasMission() const { return !route_.empty(); }
+    // The route in ENU, for drawing it.
+    const std::vector<glm::dvec3>& routeEnu() const { return route_; }
+    int currentLeg() const { return current_leg_; }
+    double distanceAlongRoute() const { return along_route_m_; }
+    double routeLength() const { return route_length_m_; }
+
+    void reset() { elapsed_s_ = 0.0; along_route_m_ = 0.0; current_leg_ = 0; }
     double elapsed() const { return elapsed_s_; }
 
     // Advances the pattern and writes position, attitude and (unless the
@@ -85,6 +101,17 @@ private:
     // Lawnmower geometry: leg length and the spacing between legs.
     double leg_length_m_ = 900.0;
     double leg_spacing_m_ = 220.0;
+
+    // Mission state. The route is the navigation waypoints in ENU with their
+    // altitudes already resolved; the aircraft walks along it at the
+    // commanded ground speed.
+    georay::Mission mission_;
+    std::vector<glm::dvec3> route_;
+    std::vector<double> leg_start_m_;  // cumulative distance at each waypoint
+    double route_length_m_ = 0.0;
+    double along_route_m_ = 0.0;
+    int current_leg_ = 0;
+    double mission_altitude_enu_ = 0.0;
 };
 
 }  // namespace georay

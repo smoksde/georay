@@ -52,8 +52,20 @@ That opens on satellite imagery of central Berlin, flying a survey orbit over
 the Brandenburg Gate on real SRTM elevation. Click anywhere in the camera view
 and you get a coordinate you can paste into a map and check.
 
-`scenes/` holds the rest — `berlin` (an OpenStreetMap street map instead of
-imagery), `munich`, `zugspitze` — selected with `--scene NAME`:
+![georay](docs/screenshot-mission.png)
+
+*A QGroundControl survey plan over Berlin: the route with a plumb line from
+each waypoint to the ground, the simulated camera on the left, and the live
+feed pane waiting for a real stream on the right.*
+
+The window has two camera panes. The left one is the simulated camera — that
+is the one you click in. The right one is a placeholder for an incoming stream
+from a real aircraft; it reads `NO SIGNAL` until there is something to put
+there. `TAB` moves focus between them, `V` enlarges the focused one.
+
+`M` switches the ground between satellite imagery, a street map, and bare
+terrain. `scenes/` holds the rest — `berlin-mission` (a QGroundControl survey
+plan), `berlin`, `munich`, `zugspitze` — selected with `--scene NAME`:
 
 ```bash
 ./build/georay --scene zugspitze
@@ -72,6 +84,54 @@ Other modes:
 | `./build/georay --size 1920x1080` | Window size. |
 | `./build/georay --scene NAME` | Load `scenes/NAME.scene`. Later flags override it. |
 | `./build/georay --origin LAT,LON --extent M` | Where the scene is, and how big. |
+| `./build/georay --mission FILE` | Fly a `.plan` or `.waypoints` file. |
+| `./build/georay --map-mode street` | Start on the street map rather than imagery. |
+
+## Flight plans from QGroundControl and Pixhawk
+
+georay flies real mission files, in both formats that are actually in use:
+
+```bash
+./build/georay --scene berlin-mission
+```
+```bash
+./build/georay --scene berlin --mission missions/berlin-survey.waypoints
+```
+
+| Format | What it is |
+| --- | --- |
+| `.plan` | QGroundControl's native JSON, with the planned home position and cruise speed |
+| `.waypoints` | The older `QGC WPL 110` text, which Mission Planner, MAVProxy and QGC all read, and what a MAVLink `MISSION_ITEM` stream looks like written down |
+
+The format is chosen by content, not by extension — a `.plan` renamed to
+`.waypoints` still loads, and guessing from the name is how a tool ends up
+reporting "malformed JSON" about a tab-separated file. `missions/` holds the
+same Berlin survey in both, which is also how the self-test checks that
+neither parser has a column or array index off by one.
+
+**The altitude frame is the part that matters.** A waypoint's `z` is
+meaningless without knowing what it is measured from, and the three frames in
+common use differ by tens of metres over any real terrain:
+
+| `MAV_FRAME` | Altitude is above |
+| --- | --- |
+| `GLOBAL` (0) | mean sea level |
+| `GLOBAL_RELATIVE_ALT` (3) | the home position — QGC's default, and what most plans contain |
+| `GLOBAL_TERRAIN_ALT` (10) | the ground directly below |
+
+Reading a relative altitude as AMSL puts the aircraft at the home elevation
+plus the height: a 38 m error over Berlin and a lethal one at an alpine site.
+`Mission::resolveAltitude` handles all three against the loaded terrain, and
+the self-test checks that the frames are not interchangeable.
+
+Non-navigation items — speed changes, camera triggers, jumps — are kept but
+excluded from the route, because treating one as a position flies the aircraft
+to latitude 0, longitude 0. Survey `ComplexItem`s are skipped: QGC expands
+those itself and georay does not re-implement its pattern generator.
+
+The route is drawn with a plumb line from every waypoint down to the ground,
+which is the point — a waypoint's altitude is the thing most often wrong in a
+plan, and a route drawn without them tells you nothing about height.
 
 ## Real maps and satellite imagery
 
@@ -85,10 +145,28 @@ name.
 scripts/fetch_map.py --source esri --origin 52.5163,13.3777 --extent 1200 --zoom 18 --max-tiles 800 --out data/berlin_sat.map
 ```
 
-`--source esri` fetches satellite imagery, which is what makes the simulated
-camera view look like an actual UAV feed; `--source osm` fetches a street map,
-better for reading street names next to a reported coordinate. `--url` takes
-any XYZ template you are licensed to use.
+Two layers can be loaded at once and switched with `M`:
+
+```bash
+scripts/fetch_map.py --source basemapde --origin 52.5163,13.3777 --extent 1200 --zoom 18 --max-tiles 800 --out data/berlin_map.map
+```
+
+| `--source` | What you get |
+| --- | --- |
+| `esri` | Satellite imagery — makes the simulated camera look like an actual UAV feed |
+| `basemapde` | Official German cartography in muted greyscale. Far calmer than OSM's standard style: no colour-coded land use, labels that stay out of the way. Germany only |
+| `basemapde-colour` | The same, in colour |
+| `osm` | OpenStreetMap's standard style — busiest of the four |
+
+![street map mode](docs/screenshot-map.png)
+
+*`M` switched to the street-map layer: the same ground, same registration,
+without the visual noise of a full-colour basemap.*
+
+`--url` takes any XYZ template you are licensed to use. A drawn map also gets
+different treatment in the shader than imagery does: almost no directional
+shading and no contour lines, because a map is already a deliberate flat
+picture and lighting it fights its own design.
 
 **Resolution runs out on the map long before it runs out on the camera.** At
 400 m the camera's ground sample distance is about 44 cm; the Berlin imagery
@@ -252,7 +330,8 @@ continental distances.
 | `1` `2` `3` `4` | Synthetic terrain: flat, hills, valley, mountains |
 | `0` | Back to the real DEM terrain, if loaded |
 | `[` `]`, `,` `.`, `-` `=`, `;` `'` | Camera zoom, height AGL, ground speed, orbit radius |
-| `D`, `F`, `C`, `X`, `V`, `M` | Lens distortion, footprint, contours, flat-earth error, inset size, map |
+| `M`, `TAB`, `V` | Map layer (satellite / street / off), focus camera pane, enlarge it |
+| `D`, `F`, `C`, `X` | Lens distortion, footprint, contours, flat-earth error |
 | `R`, `F12`, `H`, `Q` | Reset, screenshot, help, quit |
 
 ## How the geolocation works
@@ -378,7 +457,9 @@ src/gl/       thin OpenGL wrappers: shaders, buffers, an embedded bitmap font
 src/render/   terrain mesh, 3D overlays, the orbit camera
 src/          the application: window, input, HUD, flight simulation, selftest
 shaders/      GLSL
-scenes/       ready-made scenes: berlin, munich, zugspitze
+scenes/       ready-made scenes: berlin-satellite, berlin-mission, berlin,
+              munich, zugspitze
+missions/     the same survey plan in both QGC formats
 scripts/      fetch_dem.py and fetch_map.py - the only things here that
               touch the network
 ```

@@ -57,6 +57,21 @@ subtraction instead of a conversion through the ellipsoid drops the
 tangent-plane curvature term and bakes a dome into the terrain; the selftest
 checks for exactly that, against the closed-form `d^2 / 2R`.
 
+## Mission files
+
+`src/geo/mission.hpp` reads QGroundControl `.plan` and `QGC WPL` files. The
+altitude frame is the part to be careful with: MAV_FRAME_GLOBAL_RELATIVE_ALT
+is measured from the home position, not from sea level, and confusing the two
+is a 38 m error over Berlin. `resolveAltitude` is the single place that
+decides; the selftest checks the frames are not interchangeable.
+
+`src/geo/json.hpp` is a minimal JSON reader written for this rather than a
+library, because the subset needed is a handful of numbers and a
+general-purpose header would be the largest dependency in the project. It is
+still a parser reading files from disk, so keep it failing rather than
+misbehaving: bounded depth and length, checked conversions, no partially-built
+values on error.
+
 ## Process
 
 - Verify every change: clean rebuild + `./build/georay --selftest` + a runtime

@@ -31,7 +31,11 @@ void printUsage() {
         "                                munich, zugspitze. Later flags override a scene.\n"
         "  --origin LAT,LON              scene centre (default 48.137554,11.575497)\n"
         "  --extent METRES               half-extent of the terrain (default 3000)\n"
-        "  --map FILE                    map raster from scripts/fetch_map.py\n"
+        "  --map FILE                    satellite raster from scripts/fetch_map.py\n"
+        "  --street-map FILE             street-map raster; M switches between them\n"
+        "  --mission FILE                a QGroundControl .plan or QGC WPL .waypoints\n"
+        "                                list to fly\n"
+        "  --map-mode MODE               satellite (default), street, or off\n"
         "\n"
         "Real elevation data (optional; synthetic terrain is used without it):\n"
         "  --dem DIR                     directory of SRTM .hgt tiles\n"
@@ -55,7 +59,14 @@ void printUsage() {
 // default scene can be opened, so a checkout that has never run a fetch
 // script still starts rather than erroring on a missing file.
 bool dataPresent(const georay::App::Options& options) {
-    if (!options.map_path.empty() && !std::ifstream(options.map_path).good()) return false;
+    // Only the satellite layer is required for the default scene to be
+    // considered present: a street-map layer is a nicety, and refusing to
+    // open the scene because one optional raster is missing would be worse
+    // than opening it without that layer.
+    if (!options.satellite_map_path.empty() &&
+        !std::ifstream(options.satellite_map_path).good()) {
+        return false;
+    }
     if (options.dem_directory.empty()) return true;
     // A directory with no tile covering the origin is as good as absent.
     const std::string tile =
@@ -109,7 +120,24 @@ int main(int argc, char** argv) {
             continue;
         }
         if (arg == "--map" && i + 1 < argc) {
-            options.map_path = argv[++i];
+            options.satellite_map_path = argv[++i];
+            continue;
+        }
+        if (arg == "--street-map" && i + 1 < argc) {
+            options.street_map_path = argv[++i];
+            continue;
+        }
+        if (arg == "--mission" && i + 1 < argc) {
+            options.mission_path = argv[++i];
+            continue;
+        }
+        if (arg == "--map-mode" && i + 1 < argc) {
+            options.map_mode = argv[++i];
+            if (options.map_mode != "satellite" && options.map_mode != "street" &&
+                options.map_mode != "off") {
+                std::cerr << "georay: --map-mode wants satellite, street or off\n";
+                return 2;
+            }
             continue;
         }
         if (arg == "--dem" && i + 1 < argc) {
@@ -172,7 +200,7 @@ int main(int argc, char** argv) {
     //
     // Checked for existence first, so a fresh checkout with no data still
     // runs instead of failing on a file nobody has fetched yet.
-    if (options.dem_directory.empty() && options.map_path.empty() &&
+    if (options.dem_directory.empty() && options.satellite_map_path.empty() &&
         options.scene_name.empty()) {
         const std::string path = std::string(GEORAY_SCENE_DIR) + "/default.scene";
         std::string error;

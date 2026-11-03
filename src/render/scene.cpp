@@ -12,9 +12,7 @@ glm::vec3 toFloat(const glm::dvec3& v) { return glm::vec3(float(v.x), float(v.y)
 
 Scene::Scene() = default;
 
-Scene::~Scene() {
-    if (map_texture_ != 0) glDeleteTextures(1, &map_texture_);
-}
+Scene::~Scene() { clearMapRasters(); }
 
 bool Scene::initialise() {
     terrain_shader_ = std::make_unique<Shader>(shaderPath("terrain.vert"),
@@ -33,8 +31,8 @@ bool Scene::initialise() {
     return true;
 }
 
-bool Scene::setMapRaster(const MapRaster& map) {
-    if (!map.valid()) return false;
+bool Scene::setMapRaster(int layer, const MapRaster& map) {
+    if (layer < 0 || layer >= kMapLayers || !map.valid()) return false;
 
     // A raster larger than the driver's limit does not fail loudly - the
     // upload is simply dropped and the terrain renders untextured, which
@@ -49,9 +47,9 @@ bool Scene::setMapRaster(const MapRaster& map) {
         return false;
     }
 
-    if (map_texture_ == 0) glGenTextures(1, &map_texture_);
+    if (map_textures_[layer] == 0) glGenTextures(1, &map_textures_[layer]);
 
-    glBindTexture(GL_TEXTURE_2D, map_texture_);
+    glBindTexture(GL_TEXTURE_2D, map_textures_[layer]);
     glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
     glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB8, map.width(), map.height(), 0, GL_RGB,
                  GL_UNSIGNED_BYTE, map.pixels().data());
@@ -59,8 +57,8 @@ bool Scene::setMapRaster(const MapRaster& map) {
     // A raster this size can genuinely exhaust memory on a modest GPU, and
     // the symptom is again a silently untextured terrain.
     if (glGetError() == GL_OUT_OF_MEMORY) {
-        glDeleteTextures(1, &map_texture_);
-        map_texture_ = 0;
+        glDeleteTextures(1, &map_textures_[layer]);
+        map_textures_[layer] = 0;
         error_ = "the GPU could not hold a " + std::to_string(map.width()) + "x" +
                  std::to_string(map.height()) + " map texture";
         return false;
@@ -89,14 +87,17 @@ bool Scene::setMapRaster(const MapRaster& map) {
     return true;
 }
 
-void Scene::clearMapRaster() {
-    if (map_texture_ != 0) {
-        glDeleteTextures(1, &map_texture_);
-        map_texture_ = 0;
+void Scene::clearMapRasters() {
+    for (int layer = 0; layer < kMapLayers; ++layer) {
+        if (map_textures_[layer] != 0) {
+            glDeleteTextures(1, &map_textures_[layer]);
+            map_textures_[layer] = 0;
+        }
     }
 }
 
-void Scene::buildTerrain(const Terrain& terrain, const EnuFrame& frame, const MapRaster* map) {
+void Scene::buildTerrain(const Terrain& terrain, const EnuFrame& frame,
+                         const MapRaster* const maps[kMapLayers]) {
     const int n = terrain.resolution();
 
     std::vector<SurfaceVertex> vertices;
@@ -112,17 +113,23 @@ void Scene::buildTerrain(const Terrain& terrain, const EnuFrame& frame, const Ma
             // the relief is steepest - which is where it matters.
             const glm::dvec3 nrm = terrain.sampleNormal(p.x, p.y);
 
-            glm::vec2 uv(0.0f);
-            if (map && map->valid()) {
+            SurfaceVertex vertex{glm::vec3(float(p.x), float(p.y), float(h)), toFloat(nrm), {}};
+            if (maps && (maps[0] || maps[1])) {
                 // The post's own position on the ellipsoid, through the full
                 // Web Mercator transform. Doing it here, once per post, is
-                // what keeps the map registered to the ground to within a
-                // pixel across the whole scene.
+                // what keeps each map registered to the ground to within a
+                // pixel across the whole scene - and the two layers need
+                // their own coordinates because they are separate rasters
+                // that need not share a zoom or a tile range.
                 const Geodetic here = frame.toGeodetic(glm::dvec3(p.x, p.y, h));
-                const glm::dvec2 map_uv = map->uvFor(here.latitude_deg, here.longitude_deg);
-                uv = glm::vec2(float(map_uv.x), float(map_uv.y));
+                for (int layer = 0; layer < kMapLayers; ++layer) {
+                    if (!maps[layer] || !maps[layer]->valid()) continue;
+                    const glm::dvec2 uv =
+                        maps[layer]->uvFor(here.latitude_deg, here.longitude_deg);
+                    vertex.map_uv[layer] = glm::vec2(float(uv.x), float(uv.y));
+                }
             }
-            vertices.push_back({glm::vec3(float(p.x), float(p.y), float(h)), toFloat(nrm), uv});
+            vertices.push_back(vertex);
         }
     }
 
@@ -145,7 +152,8 @@ void Scene::buildTerrain(const Terrain& terrain, const EnuFrame& frame, const Ma
 }
 
 void Scene::beginWorld(const glm::mat4& view_projection, const glm::vec3& eye,
-                       const Terrain& terrain, float contour_interval_m, bool show_map) {
+                       const Terrain& terrain, float contour_interval_m, int map_layer,
+                       bool imagery) {
     terrain_shader_->bind();
     terrain_shader_->set("u_view_projection", view_projection);
     terrain_shader_->set("u_camera_position", eye);
@@ -157,11 +165,13 @@ void Scene::beginWorld(const glm::mat4& view_projection, const glm::vec3& eye,
     terrain_shader_->set("u_height_max", float(terrain.maxHeight() + 1.0));
     terrain_shader_->set("u_contour_interval", contour_interval_m);
 
-    const bool mapped = show_map && map_texture_ != 0;
+    const bool mapped = hasMap(map_layer);
     terrain_shader_->set("u_has_map", mapped ? 1 : 0);
+    terrain_shader_->set("u_map_layer", mapped ? map_layer : 0);
+    terrain_shader_->set("u_map_is_imagery", imagery ? 1 : 0);
     if (mapped) {
         glActiveTexture(GL_TEXTURE0);
-        glBindTexture(GL_TEXTURE_2D, map_texture_);
+        glBindTexture(GL_TEXTURE_2D, map_textures_[map_layer]);
         terrain_shader_->set("u_map", 0);
     }
 
@@ -397,6 +407,36 @@ void Scene::addPickRay(const GeolocateResult& result, const Terrain& terrain,
                             glm::vec4(glm::vec3(colours::pick_hit), 0.55f),
                             glm::vec4(glm::vec3(colours::pick_hit), 0.0f));
     (void)terrain;
+}
+
+void Scene::addMissionRoute(const std::vector<glm::dvec3>& route_enu, int current_leg,
+                            const Terrain& terrain) {
+    if (route_enu.empty()) return;
+
+    for (size_t i = 0; i + 1 < route_enu.size(); ++i) {
+        // The leg being flown is highlighted, so the HUD's "waypoint 3 of 7"
+        // has something to point at.
+        const glm::vec4 colour = (int(i) == current_leg) ? colours::route_active : colours::route;
+        world_lines_.addSegment(toFloat(route_enu[i]), toFloat(route_enu[i + 1]), colour);
+    }
+
+    for (size_t i = 0; i < route_enu.size(); ++i) {
+        const glm::vec3 p = toFloat(route_enu[i]);
+        const double ground = terrain.sampleHeight(route_enu[i].x, route_enu[i].y);
+        const glm::vec3 below(p.x, p.y, float(ground));
+
+        // A plumb line down to the ground, and a ring where it lands: a
+        // waypoint drawn as a dot in mid-air gives no sense of its height,
+        // which is the number most often wrong in a plan.
+        world_lines_.addSegment(p, below, glm::vec4(glm::vec3(colours::waypoint), 0.55f),
+                                glm::vec4(glm::vec3(colours::waypoint), 0.1f));
+        world_lines_.addCircleXY(below + glm::vec3(0, 0, 0.5f), 12.0f,
+                                 glm::vec4(glm::vec3(colours::waypoint), 0.45f), 20);
+
+        // A box at the waypoint itself, sized so it stays visible from the
+        // default viewing distance.
+        world_lines_.addBox(p, glm::vec3(10.0f), colours::waypoint);
+    }
 }
 
 void Scene::addGroundMarker(const glm::dvec3& enu, const glm::vec4& colour, double size_m) {

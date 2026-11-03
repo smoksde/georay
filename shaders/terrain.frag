@@ -10,6 +10,7 @@ uniform float u_height_max;
 uniform float u_contour_interval;  // metres between contour lines; <= 0 disables them
 uniform vec3 u_camera_position;
 uniform int u_has_map;             // 1 when a map raster is draped over the terrain
+uniform int u_map_is_imagery;      // 1 for satellite imagery, 0 for a drawn map
 uniform sampler2D u_map;
 
 out vec4 frag_colour;
@@ -55,11 +56,15 @@ void main() {
 
     float diffuse = max(dot(normal, u_sun_direction), 0.0);
     vec3 colour;
-    if (mapped) {
-        // A light touch on the map: enough shading for relief to read, not so
-        // much that a street name goes dark. A map that cannot be read is
-        // worse than no map, since the whole point is recognising the place a
-        // geolocated pixel landed on.
+    if (mapped && u_map_is_imagery == 0) {
+        // A drawn map is already a flat, deliberate picture. Shading it like
+        // a surface fights its own design and makes labels hard to read, so
+        // it gets only a hint of relief - just enough that a hillside is not
+        // completely flat.
+        colour = base * (0.94 + 0.10 * diffuse);
+    } else if (mapped) {
+        // Imagery carries its own baked-in lighting, so this is a light touch
+        // too, but enough that terrain relief still reads.
         colour = base * (0.82 + 0.25 * diffuse);
     } else {
         colour = base * (0.35 + 0.75 * diffuse);
@@ -68,7 +73,10 @@ void main() {
     // Contour lines, derived from the fragment's own height gradient so they
     // stay roughly a pixel wide at any zoom instead of aliasing into moire
     // when the terrain is far away.
-    if (u_contour_interval > 0.0) {
+    // Contours over a drawn map double up with its own contour and boundary
+    // lines, which is exactly the noise that mode exists to avoid.
+    bool want_contours = u_contour_interval > 0.0 && !(mapped && u_map_is_imagery == 0);
+    if (want_contours) {
         float h = v_world.z / u_contour_interval;
         float width = max(fwidth(h), 1e-5);
         float line = abs(fract(h) - 0.5) / width;

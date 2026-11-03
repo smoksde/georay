@@ -102,8 +102,14 @@ bool App::Options::loadScene(const std::string& path, Options& options, std::str
             if (!number(options.half_extent_m)) return false;
         } else if (key == "dem") {
             options.dem_directory = value;
-        } else if (key == "map") {
-            options.map_path = value;
+        } else if (key == "map" || key == "map-satellite") {
+            options.satellite_map_path = value;
+        } else if (key == "map-street") {
+            options.street_map_path = value;
+        } else if (key == "mission") {
+            options.mission_path = value;
+        } else if (key == "map-mode") {
+            options.map_mode = value;
         } else if (key == "geoid") {
             options.geoid_grid_path = value;
         } else if (key == "geoid-separation") {
@@ -261,25 +267,44 @@ bool App::buildWorld() {
         }
     }
 
-    if (!options_.map_path.empty()) {
+    const std::string layer_paths[2] = {options_.satellite_map_path, options_.street_map_path};
+    const char* layer_names[2] = {"satellite", "street map"};
+    for (int layer = 0; layer < 2; ++layer) {
+        if (layer_paths[layer].empty()) continue;
         std::string error;
-        if (MapRaster::load(options_.map_path, map_, error)) {
-            if (scene_->setMapRaster(map_)) {
-                std::cout << "georay: map " << map_.width() << "x" << map_.height()
-                          << " at zoom " << map_.zoom() << ", "
-                          << map_.metresPerPixel(frame_origin_.latitude_deg) << " m/pixel, "
-                          << map_.attribution() << "\n";
-            } else {
-                std::cerr << "georay: " << scene_->error() << "\n";
-                map_ = MapRaster();  // so the HUD does not claim a map that is not there
-            }
-        } else {
+        if (!MapRaster::load(layer_paths[layer], maps_[layer], error)) {
             // Same reasoning as a missing DEM: the tool works without it, so
             // say what is wrong and carry on rather than refusing to start.
             std::cerr << "georay: " << error << "\n"
-                      << "georay: continuing without a map; run scripts/fetch_map.py\n";
+                      << "georay: continuing without the " << layer_names[layer]
+                      << " layer; run scripts/fetch_map.py\n";
+            maps_[layer] = MapRaster();
+            continue;
+        }
+        if (!scene_->setMapRaster(layer, maps_[layer])) {
+            std::cerr << "georay: " << scene_->error() << "\n";
+            maps_[layer] = MapRaster();  // so the HUD cannot claim a layer that is not there
+            continue;
+        }
+        map_is_imagery_[layer] = (layer == 0);
+        std::cout << "georay: " << layer_names[layer] << " " << maps_[layer].width() << "x"
+                  << maps_[layer].height() << " at zoom " << maps_[layer].zoom() << ", "
+                  << maps_[layer].metresPerPixel(frame_origin_.latitude_deg) << " m/pixel, "
+                  << maps_[layer].attribution() << "\n";
+    }
+    // Start on the requested layer, falling back to whichever actually
+    // loaded - asking for satellite and silently getting bare terrain
+    // because the file was missing would be confusing.
+    map_layer_ = -1;
+    if (options_.map_mode == "street" && maps_[1].valid()) {
+        map_layer_ = 1;
+    } else if (options_.map_mode != "off") {
+        for (int layer = 0; layer < 2; ++layer) {
+            if (maps_[layer].valid()) { map_layer_ = layer; break; }
         }
     }
+
+    if (!options_.mission_path.empty()) loadMissionFile(options_.mission_path);
 
     if (geoid_.isIdentity() && using_dem_) {
         // Worth saying out loud: without it every elevation this tool reports
@@ -290,7 +315,55 @@ bool App::buildWorld() {
                      "or --geoid.\n";
     }
 
-    scene_->buildTerrain(*terrain_, frame_, map_.valid() ? &map_ : nullptr);
+    rebuildTerrainMesh();
+    return true;
+}
+
+void App::rebuildTerrainMesh() {
+    const MapRaster* layers[Scene::kMapLayers] = {
+        maps_[0].valid() ? &maps_[0] : nullptr,
+        maps_[1].valid() ? &maps_[1] : nullptr,
+    };
+    scene_->buildTerrain(*terrain_, frame_, layers);
+}
+
+bool App::loadMissionFile(const std::string& path) {
+    Mission loaded;
+    std::string error;
+    if (!loadMission(path, loaded, error)) {
+        std::cerr << "georay: " << error << "\n";
+        return false;
+    }
+
+    mission_ = std::move(loaded);
+    has_mission_ = true;
+
+    const double separation = geoid_.separationAt(frame_origin_.latitude_deg,
+                                                  frame_origin_.longitude_deg);
+    flight_.setMission(mission_, *terrain_, frame_, separation);
+    flight_.setPattern(FlightSimulator::Pattern::Mission);
+    flight_.reset();
+
+    std::cout << "georay: mission '" << mission_.name << "' - "
+              << mission_.navigationItems().size() << " waypoints, "
+              << flight_.routeLength() << " m of route";
+    if (mission_.has_home) {
+        std::cout << ", home " << mission_.home.latitude_deg << ", "
+                  << mission_.home.longitude_deg;
+    }
+    std::cout << "\n";
+
+    // Warn when the plan is not where the scene is. Flying a Berlin mission
+    // over Munich terrain would otherwise just look like the aircraft left.
+    double south, north, west, east;
+    if (mission_.bounds(south, north, west, east)) {
+        const double distance = horizontalDistance(
+            frame_origin_, Geodetic((south + north) * 0.5, (west + east) * 0.5, 0.0));
+        if (distance > terrain_->halfExtent() * 1.5) {
+            std::cerr << "georay: this mission is " << (distance / 1000.0)
+                      << " km from the scene origin; pass --origin near it\n";
+        }
+    }
     return true;
 }
 
@@ -311,10 +384,21 @@ bool App::loadDemTerrain() {
     return using_dem_;
 }
 
+bool App::mapVisible() const { return map_layer_ >= 0 && scene_->hasMap(map_layer_); }
+
+bool App::mapIsImagery() const {
+    return map_layer_ >= 0 && map_layer_ < 2 && map_is_imagery_[map_layer_];
+}
+
+const char* App::mapLayerName() const {
+    if (map_layer_ < 0) return "OFF - BARE TERRAIN";
+    return map_layer_ == 0 ? "SATELLITE" : "STREET MAP";
+}
+
 bool App::showStructures() const {
     // They exist to give synthetic terrain recognisable features with real
     // parallax. Real elevation data and real imagery already have both.
-    return !using_dem_ && !map_.valid();
+    return !using_dem_ && !maps_[0].valid() && !maps_[1].valid();
 }
 
 void App::buildStructures() {
@@ -344,6 +428,12 @@ void App::resetSimulation() {
     if (options_.flight_pattern == "lawnmower") pattern = FlightSimulator::Pattern::Lawnmower;
     else if (options_.flight_pattern == "transit") pattern = FlightSimulator::Pattern::Transit;
     else if (options_.flight_pattern == "hold") pattern = FlightSimulator::Pattern::Hold;
+    else if (options_.flight_pattern == "mission") pattern = FlightSimulator::Pattern::Mission;
+
+    // A loaded plan wins over the scene's default pattern. Asking for a
+    // mission and then flying a generic orbit around the scene centre would
+    // ignore the one thing the file specifies.
+    if (has_mission_ && flight_.hasMission()) pattern = FlightSimulator::Pattern::Mission;
 
     flight_.configure(pattern, glm::dvec2(0.0, 0.0));
     flight_.setGimbalMode(FlightSimulator::GimbalMode::TrackPoint);
@@ -358,13 +448,30 @@ void App::resetSimulation() {
     // pose rather than the default one at the origin.
     flight_.update(0.0, *terrain_, frame_, uav_);
 
-    view_camera_.setTarget(glm::vec3(0.0f, 0.0f, float(terrain_->sampleHeight(0, 0))));
     // Back off far enough to frame the terrain's relief as well as its
     // extent. Scaling by the horizontal size alone is fine on a plain and
     // puts the camera inside the mountain on real alpine terrain, where the
     // scene is 2 km tall and only 6 km wide.
     const float relief = float(terrain_->maxHeight() - terrain_->minHeight());
-    view_camera_.setDistance(std::max(float(terrain_->halfExtent()) * 0.5f, relief * 1.5f));
+    float distance = std::max(float(terrain_->halfExtent()) * 0.5f, relief * 1.5f);
+    glm::vec3 target(0.0f, 0.0f, float(terrain_->sampleHeight(0, 0)));
+
+    // With a plan loaded, frame the plan instead of the terrain: the route is
+    // the subject, and a view that cuts half of it off makes the waypoints
+    // impossible to judge against the ground.
+    if (has_mission_ && flight_.routeEnu().size() >= 2) {
+        glm::dvec3 lo = flight_.routeEnu().front(), hi = lo;
+        for (const glm::dvec3& p : flight_.routeEnu()) {
+            lo = glm::min(lo, p);
+            hi = glm::max(hi, p);
+        }
+        const glm::dvec3 centre = (lo + hi) * 0.5;
+        target = glm::vec3(float(centre.x), float(centre.y),
+                           float(terrain_->sampleHeight(centre.x, centre.y)));
+        distance = std::max(distance, float(glm::length(glm::dvec2(hi - lo))) * 0.9f);
+    }
+    view_camera_.setTarget(target);
+    view_camera_.setDistance(distance);
 
     have_pick_ = false;
     hover_valid_ = false;
@@ -450,8 +557,18 @@ void App::onKeyDown(const SDL_Keysym& key) {
         case SDLK_v:
             large_inset_ = !large_inset_;
             break;
-        case SDLK_m:
-            show_map_ = !show_map_;
+        case SDLK_m: {
+            // Cycle satellite -> street -> off, skipping layers that are not
+            // loaded, so M always does something visible.
+            for (int step = 0; step < 3; ++step) {
+                map_layer_ = (map_layer_ + 2) % 3 - 1;  // 0 -> 1 -> -1 -> 0
+                if (map_layer_ < 0 || maps_[map_layer_].valid()) break;
+            }
+            break;
+        }
+        case SDLK_TAB:
+            // Which pane V enlarges. Only meaningful with two of them.
+            focused_camera_ = (focused_camera_ + 1) % kCameraPanes;
             break;
         case SDLK_b:
             follow_aircraft_ = !follow_aircraft_;
@@ -476,7 +593,7 @@ void App::onKeyDown(const SDL_Keysym& key) {
                                            Terrain::Kind::Valley, Terrain::Kind::Mountains};
             terrain_->generate(kinds[key.sym - SDLK_1]);
             using_dem_ = false;
-            scene_->buildTerrain(*terrain_, frame_, map_.valid() ? &map_ : nullptr);
+            rebuildTerrainMesh();
             // The pick refers to the old surface, so it is no longer an
             // answer to anything.
             have_pick_ = false;
@@ -488,7 +605,7 @@ void App::onKeyDown(const SDL_Keysym& key) {
             // measured and synthetic ground on the same scene is the most
             // direct way to see how much the terrain model actually matters.
             if (dem_ && loadDemTerrain()) {
-                scene_->buildTerrain(*terrain_, frame_, map_.valid() ? &map_ : nullptr);
+                rebuildTerrainMesh();
                 have_pick_ = false;
             }
             break;
@@ -611,23 +728,45 @@ void App::onMouseMotion(const SDL_MouseMotionEvent& event) {
 // Geometry helpers
 // --------------------------------------------------------------------------
 
-glm::vec4 App::insetRect() const {
+bool App::cameraPaneVisible(int index) const {
+    // Enlarging one pane hides the other: two panes at half the window each
+    // would not fit, and overlapping them would hide the readouts.
+    return !large_inset_ || index == focused_camera_;
+}
+
+glm::vec4 App::cameraRect(int index) const {
     const float margin = 16.0f;
-    const float fraction = large_inset_ ? 0.52f : 0.30f;
-    float h = float(height_) * fraction;
-    float w = h * float(camera_.aspectRatio());
-    // Never let the inset eat the window: on a narrow window the width is the
-    // binding constraint, not the height.
-    const float max_w = float(width_) - 2.0f * margin;
-    if (w > max_w) {
-        w = max_w;
-        h = w / float(camera_.aspectRatio());
+    const float gap = 10.0f;
+    const float aspect = float(camera_.aspectRatio());
+
+    float h = float(height_) * (large_inset_ ? 0.50f : 0.28f);
+    float w = h * aspect;
+
+    // Never let the panes eat the window: on a narrow window the width is
+    // the binding constraint, not the height.
+    const int panes = large_inset_ ? 1 : kCameraPanes;
+    const float available = float(width_) - 2.0f * margin - gap * float(panes - 1);
+    if (w * float(panes) > available) {
+        w = available / float(panes);
+        h = w / aspect;
     }
-    return glm::vec4(float(width_) - w - margin, float(height_) - h - margin, w, h);
+
+    const float y = float(height_) - h - margin;
+    if (large_inset_) return glm::vec4(float(width_) - w - margin, y, w, h);
+
+    // Right-aligned, simulated camera to the left of the live one, so the
+    // pane you interact with sits next to the readouts it drives.
+    const float right_x = float(width_) - w - margin;
+    const float x = (index == kLiveCamera) ? right_x : right_x - w - gap;
+    return glm::vec4(x, y, w, h);
 }
 
 bool App::windowToImagePixel(int x, int y, glm::dvec2& out) const {
-    const glm::vec4 rect = insetRect();
+    // Only the simulated pane maps to camera pixels. The live pane shows
+    // footage from a real aircraft whose pose georay does not know, so a
+    // click there has no ray to trace - see renderLiveCameraPlaceholder().
+    if (!cameraPaneVisible(kSimulatedCamera)) return false;
+    const glm::vec4 rect = cameraRect(kSimulatedCamera);
     if (x < rect.x || x > rect.x + rect.z || y < rect.y || y > rect.y + rect.w) return false;
     out.x = double(x - rect.x) / double(rect.z) * double(camera_.imageWidth());
     out.y = double(y - rect.y) / double(rect.w) * double(camera_.imageHeight());
@@ -724,7 +863,7 @@ void App::render() {
     glCullFace(GL_BACK);
 
     renderWorldView();
-    renderCameraInset();
+    if (cameraPaneVisible(kSimulatedCamera)) renderSimulatedCamera();
     renderHud();
 
     SDL_GL_SwapWindow(window_);
@@ -737,12 +876,12 @@ void App::renderWorldView() {
     const glm::vec3 eye = view_camera_.position();
 
     scene_->beginWorld(view_projection, eye, *terrain_, show_contours_ ? 25.0f : 0.0f,
-                       show_map_);
+                       map_layer_, mapIsImagery());
     scene_->drawTerrain();
 
     PrimitiveBatch& lines = scene_->world();
     // A grid drawn over a readable map is clutter, not scale.
-    if (!(show_map_ && scene_->hasMap())) scene_->addGroundGrid(*terrain_, 200.0);
+    if (!mapVisible()) scene_->addGroundGrid(*terrain_, 200.0);
     scene_->addFrameAxes(300.0);
 
     // Structures, as wireframe boxes standing on the surface. Only on
@@ -759,6 +898,9 @@ void App::renderWorldView() {
                      colours::landmark);
     }
 
+    if (has_mission_ && flight_.hasMission()) {
+        scene_->addMissionRoute(flight_.routeEnu(), flight_.currentLeg(), *terrain_);
+    }
     scene_->addAircraft(uav_, frame_, *terrain_, 28.0);
     scene_->addCameraFrustum(uav_, camera_, frame_, footprint_, 2500.0);
     if (show_footprint_) scene_->addFootprint(footprint_, *terrain_);
@@ -789,8 +931,8 @@ void App::renderWorldView() {
     scene_->endWorld();
 }
 
-void App::renderCameraInset() {
-    const glm::vec4 rect = insetRect();
+void App::renderSimulatedCamera() {
+    const glm::vec4 rect = cameraRect(kSimulatedCamera);
     // GL's viewport origin is the bottom-left of the window; the rect is in
     // top-left pixel coordinates.
     const GLint gl_x = GLint(rect.x);
@@ -812,11 +954,11 @@ void App::renderCameraInset() {
     const glm::vec3 eye = toFloat(cameraPositionEnu(uav_, frame_));
 
     scene_->beginWorld(view_projection, eye, *terrain_, show_contours_ ? 25.0f : 0.0f,
-                       show_map_);
+                       map_layer_, mapIsImagery());
     scene_->drawTerrain();
 
     PrimitiveBatch& lines = scene_->world();
-    if (!(show_map_ && scene_->hasMap())) scene_->addGroundGrid(*terrain_, 200.0);
+    if (!mapVisible()) scene_->addGroundGrid(*terrain_, 200.0);
     for (const Structure& s : showStructures() ? structures_ : std::vector<Structure>{}) {
         const double base = terrain_->sampleHeight(s.position_enu.x, s.position_enu.y);
         const glm::vec3 centre(float(s.position_enu.x), float(s.position_enu.y),
@@ -934,7 +1076,8 @@ void App::renderHud() {
         const float w = 400.0f;
         float rows = 9.0f;
         if (using_dem_) rows += dem_report_.posts_filled > 0 ? 2.0f : 1.0f;
-        if (map_.valid()) rows += 1.0f;
+        if (maps_[0].valid() || maps_[1].valid()) rows += mapVisible() ? 2.0f : 1.0f;
+        if (has_mission_) rows += 3.0f;
         const float h = rows * line_h + 2.0f * pad;
         const float y = pad + 20.0f * line_h + 2.0f * pad + pad;
         panel(pad, y, w, h);
@@ -950,16 +1093,20 @@ void App::renderHud() {
         c.row("ORBIT RADIUS", num(flight_.radius(), 0) + " M", colours::text_value);
         c.row("TERRAIN", terrain_->sourceName(),
               using_dem_ ? colours::text_good : colours::text_value);
-        if (map_.valid()) {
-            // The map's ground resolution against the camera's own GSD is the
-            // number that says whether zooming in further can show you
-            // anything: below about one map pixel per camera pixel, the view
-            // is magnifying the basemap rather than resolving the ground.
-            c.row("MAP", show_map_
-                             ? num(map_.metresPerPixel(frame_origin_.latitude_deg), 2) +
-                                   " M/PX Z" + std::to_string(map_.zoom())
-                             : "HIDDEN (M)",
-                  show_map_ ? colours::text_value : colours::text_dim);
+        if (maps_[0].valid() || maps_[1].valid()) {
+            c.row("MAP MODE", mapLayerName(),
+                  mapVisible() ? colours::text_good : colours::text_dim);
+            if (mapVisible()) {
+                // The map's ground resolution against the camera's own GSD is
+                // the number that says whether zooming in further can show
+                // you anything: below about one map pixel per camera pixel,
+                // the view is magnifying the basemap rather than resolving
+                // the ground.
+                const MapRaster& active = maps_[map_layer_];
+                c.row("MAP RES", num(active.metresPerPixel(frame_origin_.latitude_deg), 2) +
+                                     " M/PX Z" + std::to_string(active.zoom()),
+                      colours::text_value);
+            }
         }
         if (using_dem_) {
             c.row("GEOID", geoid_.description(),
@@ -980,13 +1127,28 @@ void App::renderHud() {
             // would be inventing a number for the most visible field here.
             c.row("FOOTPRINT", "PARTLY OFF GROUND", colours::text_warn);
         }
+        if (has_mission_) {
+            c.blank();
+            c.line("MISSION", colours::text_primary);
+            c.row("PLAN", mission_.name.substr(0, 22), colours::text_good);
+            const size_t waypoints = mission_.navigationItems().size();
+            c.row("WAYPOINTS", std::to_string(flight_.currentLeg() + 1) + " OF " +
+                                   std::to_string(waypoints) + "  " +
+                                   num(flight_.routeLength() / 1000.0, 2) + " KM",
+                  colours::text_value);
+        }
         c.row("FPS", num(fps_, 0), colours::text_dim);
     }
 
     // ---- the answer ----------------------------------------------------
     {
         const float w = 560.0f;
-        const float h = 16.0f * line_h + 2.0f * pad;
+        float rows = 16.0f;
+        if (have_pick_ && pick_result_.valid && show_flat_comparison_ &&
+            pick_flat_result_.valid) {
+            rows += 3.0f;
+        }
+        const float h = rows * line_h + 2.0f * pad;
         const float x = pad;
         const float y = float(height_) - h - pad;
         panel(x, y, w, h);
@@ -1041,45 +1203,87 @@ void App::renderHud() {
                       colours::text_value);
                 c.row("D/ALTITUDE", num(sensitivity_alt_m_per_m_, 2) + " M PER M",
                       colours::text_value);
+
+                // The flat-earth comparison lives here rather than in its own
+                // panel: it is a property of this same picked pixel, and a
+                // separate panel had nowhere left to go once there were two
+                // camera panes.
+                if (show_flat_comparison_ && pick_flat_result_.valid) {
+                    c.blank();
+                    const double error =
+                        glm::length(glm::dvec2(pick_result_.ground_enu) -
+                                    glm::dvec2(pick_flat_result_.ground_enu));
+                    c.row("FLAT-EARTH", formatDistance(error) + " OFF",
+                          error > 5.0 ? colours::text_warn : colours::text_good);
+                    c.row("  ITS ELEV", num(pick_flat_result_.ground_geodetic.altitude_m, 1) +
+                                            " M VS " +
+                                            num(pick_result_.ground_geodetic.altitude_m, 1),
+                          colours::text_dim);
+                }
             }
         }
     }
 
-    // ---- flat-earth comparison ----------------------------------------
-    if (show_flat_comparison_ && have_pick_) {
-        const float w = 440.0f;
-        const float h = 6.0f * line_h + 2.0f * pad;
-        const float x = pad + 560.0f + pad;
-        const float y = float(height_) - h - pad;
-        panel(x, y, w, h);
-        Cursor c{text, x + pad, y + pad, s, line_h};
+    // ---- the live-feed pane --------------------------------------------
+    //
+    // Deliberately empty. It is where footage from a real aircraft will go,
+    // and an empty pane that says so is more honest than one showing the
+    // simulation twice - which would make it impossible to tell, at a
+    // glance, which picture is real.
+    if (cameraPaneVisible(kLiveCamera)) {
+        const glm::vec4 rect = cameraRect(kLiveCamera);
+        fills.addQuad({rect.x, rect.y}, {rect.z, rect.w},
+                      glm::vec4(0.055f, 0.065f, 0.08f, 1.0f));
 
-        c.line("FLAT-EARTH COMPARISON", colours::text_primary);
-        if (pick_result_.valid && pick_flat_result_.valid) {
-            const double error = glm::length(glm::dvec2(pick_result_.ground_enu) -
-                                             glm::dvec2(pick_flat_result_.ground_enu));
-            c.row("TERRAIN AWARE", num(pick_result_.ground_geodetic.altitude_m, 1) + " M",
-                  colours::text_value);
-            c.row("FLAT ASSUMED", num(pick_flat_result_.ground_geodetic.altitude_m, 1) + " M",
-                  colours::text_dim);
-            c.row("HORIZ ERROR", formatDistance(error),
-                  error > 5.0 ? colours::text_warn : colours::text_good);
-            c.line("THE RED MARKER IS WHERE A TERRAIN-", colours::text_dim);
-            c.line("UNAWARE SYSTEM WOULD HAVE PUT IT.", colours::text_dim);
-        } else {
-            c.line("NO COMPARISON FOR THIS PIXEL.", colours::text_dim);
-        }
+        const glm::vec4 edge = focused_camera_ == kLiveCamera ? colours::text_label
+                                                              : colours::panel_edge;
+        lines.addSegment({rect.x, rect.y, 0}, {rect.x + rect.z, rect.y, 0}, edge);
+        lines.addSegment({rect.x + rect.z, rect.y, 0}, {rect.x + rect.z, rect.y + rect.w, 0},
+                         edge);
+        lines.addSegment({rect.x + rect.z, rect.y + rect.w, 0}, {rect.x, rect.y + rect.w, 0},
+                         edge);
+        lines.addSegment({rect.x, rect.y + rect.w, 0}, {rect.x, rect.y, 0}, edge);
+
+        // Corner brackets, so an empty pane still reads as a video frame
+        // rather than as a hole in the interface.
+        const float bracket = std::min(rect.z, rect.w) * 0.09f;
+        const glm::vec4 faint(0.30f, 0.36f, 0.42f, 1.0f);
+        const float x0 = rect.x + 8.0f, y0 = rect.y + 8.0f;
+        const float x1 = rect.x + rect.z - 8.0f, y1 = rect.y + rect.w - 8.0f;
+        lines.addSegment({x0, y0, 0}, {x0 + bracket, y0, 0}, faint);
+        lines.addSegment({x0, y0, 0}, {x0, y0 + bracket, 0}, faint);
+        lines.addSegment({x1, y0, 0}, {x1 - bracket, y0, 0}, faint);
+        lines.addSegment({x1, y0, 0}, {x1, y0 + bracket, 0}, faint);
+        lines.addSegment({x0, y1, 0}, {x0 + bracket, y1, 0}, faint);
+        lines.addSegment({x0, y1, 0}, {x0, y1 - bracket, 0}, faint);
+        lines.addSegment({x1, y1, 0}, {x1 - bracket, y1, 0}, faint);
+        lines.addSegment({x1, y1, 0}, {x1, y1 - bracket, 0}, faint);
+
+        const std::string title = "LIVE FEED";
+        const std::string status = "NO SIGNAL";
+        const std::string note = "AWAITING STREAM FROM AIRCRAFT";
+        text.add(title, {rect.x + 8.0f, rect.y + 8.0f}, s, colours::text_dim);
+        text.add(status,
+                 {rect.x + (rect.z - TextRenderer::textWidth(status, s)) * 0.5f,
+                  rect.y + rect.w * 0.5f - 5.0f * s},
+                 s, colours::text_warn);
+        text.add(note,
+                 {rect.x + (rect.z - TextRenderer::textWidth(note, 1.0f)) * 0.5f,
+                  rect.y + rect.w * 0.5f + 7.0f * s},
+                 1.0f, colours::text_dim);
     }
 
-    // ---- the camera view's own frame and reticle ----------------------
-    {
-        const glm::vec4 rect = insetRect();
-        lines.addSegment({rect.x, rect.y, 0}, {rect.x + rect.z, rect.y, 0}, colours::panel_edge);
+    // ---- the simulated camera's frame and reticle ----------------------
+    if (cameraPaneVisible(kSimulatedCamera)) {
+        const glm::vec4 rect = cameraRect(kSimulatedCamera);
+        const glm::vec4 edge = focused_camera_ == kSimulatedCamera ? colours::text_label
+                                                                   : colours::panel_edge;
+        lines.addSegment({rect.x, rect.y, 0}, {rect.x + rect.z, rect.y, 0}, edge);
         lines.addSegment({rect.x + rect.z, rect.y, 0}, {rect.x + rect.z, rect.y + rect.w, 0},
-                         colours::panel_edge);
+                         edge);
         lines.addSegment({rect.x + rect.z, rect.y + rect.w, 0}, {rect.x, rect.y + rect.w, 0},
-                         colours::panel_edge);
-        lines.addSegment({rect.x, rect.y + rect.w, 0}, {rect.x, rect.y, 0}, colours::panel_edge);
+                         edge);
+        lines.addSegment({rect.x, rect.y + rect.w, 0}, {rect.x, rect.y, 0}, edge);
 
         // The principal point, which is where the boresight lands - not
         // necessarily the middle of the frame, and drawing it at the middle
@@ -1117,7 +1321,7 @@ void App::renderHud() {
             text.add(content, {rect.x + 7.0f, y}, s, colour);
         };
 
-        labelled("SIMULATED UAV CAMERA", rect.y + 6.0f, colours::text_primary);
+        labelled("SIMULATED CAMERA", rect.y + 6.0f, colours::text_primary);
 
         if (hover_valid_ && hover_result_.valid) {
             // A live readout pinned to the bottom of the inset, so a value is
@@ -1133,8 +1337,8 @@ void App::renderHud() {
         // fetched it gets credited wherever it is shown. Drawn whenever the
         // map is visible, at the bottom of the window where it is out of the
         // way but not hidden.
-        if (show_map_ && scene_->hasMap() && !map_.attribution().empty()) {
-            const std::string credit = map_.attribution();
+        if (mapVisible() && !maps_[map_layer_].attribution().empty()) {
+            const std::string credit = maps_[map_layer_].attribution();
             const float width = TextRenderer::textWidth(credit, 1.0f) + 8.0f;
             const float x = float(width_) - width - 4.0f;
             const float y = float(height_) - 5.0f - 4.0f;
@@ -1174,7 +1378,8 @@ void App::renderHud() {
             "C                    CONTOUR LINES",
             "X                    FLAT-EARTH ERROR",
             "V                    CAMERA VIEW SIZE",
-            "M                    MAP OVERLAY",
+            "M                    MAP / SATELLITE / OFF",
+            "TAB                  FOCUS CAMERA PANE",
             "R                    RESET",
             "F12                  SCREENSHOT",
             "Q / ESC              QUIT",
@@ -1245,7 +1450,7 @@ int App::run() {
     // inset and a pixel is picked, so the captured frame exercises the
     // geolocation path rather than just the empty HUD.
     if (!options_.screenshot_path.empty()) {
-        const glm::vec4 rect = insetRect();
+        const glm::vec4 rect = cameraRect(kSimulatedCamera);
         glm::dvec2 image_pixel;
         if (windowToImagePixel(int(rect.x + rect.z * 0.42f), int(rect.y + rect.w * 0.62f),
                                image_pixel)) {

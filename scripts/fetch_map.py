@@ -11,6 +11,9 @@ Typical use:
 
     scripts/fetch_map.py --origin 52.5163,13.3777 --extent 2000 --out data/berlin.map
 
+--source picks what you get: esri for satellite imagery, basemapde for a calm
+greyscale street map (Germany only), osm for OpenStreetMap's standard style.
+
 --source esri fetches satellite imagery instead of a street map, which is what
 makes the simulated camera view look like an actual UAV feed. Imagery is also
 where resolution runs out first: a camera at 200 m sees about 11 cm per pixel,
@@ -31,6 +34,7 @@ requires an account and their own terms.
 """
 
 import argparse
+import hashlib
 import math
 import os
 import struct
@@ -51,6 +55,19 @@ SOURCES = {
         "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery"
         "/MapServer/tile/{z}/{y}/{x}",
         "IMAGERY (C) ESRI, MAXAR, EARTHSTAR GEOGRAPHICS",
+    ),
+    # Official German cartography, and far calmer to look at than OSM's
+    # standard style: muted greys, no colour-coded land use, labels that stay
+    # out of the way. Germany only. Licence: dl-de/by-2-0.
+    "basemapde": (
+        "https://sgx.geodatenzentrum.de/wmts_basemapde/tile/1.0.0"
+        "/de_basemapde_web_raster_grau/default/GLOBAL_WEBMERCATOR/{z}/{y}/{x}.png",
+        "(C) GEOBASIS-DE / BKG (DL-DE/BY-2-0)",
+    ),
+    "basemapde-colour": (
+        "https://sgx.geodatenzentrum.de/wmts_basemapde/tile/1.0.0"
+        "/de_basemapde_web_raster_farbe/default/GLOBAL_WEBMERCATOR/{z}/{y}/{x}.png",
+        "(C) GEOBASIS-DE / BKG (DL-DE/BY-2-0)",
     ),
 }
 DEFAULT_URL, DEFAULT_ATTRIBUTION = SOURCES["osm"]
@@ -88,7 +105,12 @@ def fetch_tile(url_template, zoom, x, y, cache_dir):
     # Keyed by the URL template as well as the coordinates: two sources serve
     # different pictures of the same tile, and a cache that confused them
     # would quietly mix a street map into satellite imagery.
-    key = "%08x" % (hash(url_template) & 0xFFFFFFFF)
+    #
+    # hashlib rather than hash(): Python randomises string hashing per
+    # process, so hash() would give a different key every run and the cache
+    # would never hit - re-downloading every tile each time, which is the one
+    # thing a tile usage policy asks you not to do.
+    key = hashlib.md5(url_template.encode("utf-8")).hexdigest()[:8]
     cache_path = os.path.join(cache_dir, "%s_%d_%d_%d.img" % (key, zoom, x, y))
     if os.path.exists(cache_path):
         with open(cache_path, "rb") as handle:
