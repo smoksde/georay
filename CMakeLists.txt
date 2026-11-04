@@ -110,6 +110,8 @@ add_executable(georay
     src/map/tilefetcher.cpp
     src/map/maptexture.cpp
     src/app.cpp
+    src/app_input.cpp
+    src/app_render.cpp
     src/flight.cpp
     src/selftest.cpp
     src/gl/shader.cpp
