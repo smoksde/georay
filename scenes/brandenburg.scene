@@ -26,7 +26,7 @@ extent            20000
 
 dem               data/dem
 map-street        basemapde
-map-mode          street
+map-mode          map
 
 # EGM96 over Brandenburg runs about 39-42 m, so one constant is good to a
 # couple of metres across the whole region rather than the few centimetres it

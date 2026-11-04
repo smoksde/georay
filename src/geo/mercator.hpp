@@ -46,6 +46,15 @@ int zoomForResolution(double lat_deg, double metres_per_pixel, int min_zoom, int
 // for a picture that ends up identical.
 int zoomNotFinerThan(double lat_deg, double metres_per_pixel, int min_zoom, int max_zoom);
 
+// The zoom whose native resolution is closest to a wanted one, rounding
+// either way.
+//
+// For streamed chunks this is the right rounding and the other two are not.
+// Rounding up is a whole extra zoom level - four times the tiles - to be
+// twice as sharp as the screen can show; rounding down is visibly soft. The
+// nearest level is within a factor of 1.4 either way, which is invisible.
+int zoomNearest(double lat_deg, double metres_per_pixel, int min_zoom, int max_zoom);
+
 // A geographic box, held in Mercator so that interpolation inside it is
 // linear in the projection rather than in latitude.
 class MercatorBox {

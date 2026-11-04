@@ -55,6 +55,12 @@ int zoomNotFinerThan(double lat_deg, double metres_per_pixel, int min_zoom, int 
     return std::min(std::max(zoom, min_zoom), max_zoom);
 }
 
+int zoomNearest(double lat_deg, double metres_per_pixel, int min_zoom, int max_zoom) {
+    if (!(metres_per_pixel > 0.0)) return max_zoom;
+    const double exact = std::log2(mercatorMetresPerPixel(lat_deg, 0) / metres_per_pixel);
+    return std::min(std::max(int(std::lround(exact)), min_zoom), max_zoom);
+}
+
 MercatorBox MercatorBox::fromBounds(double south_deg, double north_deg, double west_deg,
                                     double east_deg, int zoom) {
     MercatorBox box;

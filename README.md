@@ -214,43 +214,66 @@ the frame re-anchors), and one geoid constant is good to a couple of metres
 across a whole Land rather than the few centimetres it manages over a single
 scene.
 
-## Maps: fetched live, drawn at the zoom the view needs
+## The ground: three modes, streamed as you look around
 
-The map is stitched from tiles at run time, not assembled ahead of it. Two
-things follow.
+The ground is a grid of flat chunks loaded around wherever the camera is
+pointed — the same idea as a voxel game streaming terrain in, and for the same
+reason: you can see a few kilometres, the world is a few hundred, and only the
+difference needs to exist at any moment. Look somewhere new and the chunks
+there appear; the ones behind you are dropped.
 
-**The zoom matches the view.** A texture covers a fixed geographic box, so its
-texture coordinates depend on that box alone — re-stitch at a finer zoom and
-every coordinate already baked into the terrain mesh stays where it was. The
-map sharpens without the mesh being touched. georay picks the zoom from
-whichever of the two views is more demanding, bounded by what the texture can
-hold: fetching a zoom finer than the pixel budget would download four times
-the tiles for a picture that gets averaged back to the same thing.
+![the three ground modes](docs/screenshot-map.png)
 
-**Tiles can arrive while you fly.**
+`M` cycles three skins:
 
-```bash
-./build/georay --scene brandenburg --online
-```
+| Mode | What it shows |
+| --- | --- |
+| **Map** | Official greyscale cartography — street names, building footprints |
+| **Satellite** | Aerial imagery, so the camera view looks like a real UAV feed |
+| **Height map** | Hypsometric colouring with contour lines, sampled from the DEM |
 
-Missing tiles are requested as the stitcher finds the gaps, fetched on a
-worker thread, and the map re-stitches as they land. The render loop never
-waits on a socket.
+![height map mode](docs/screenshot-height.png)
 
-`--online` is off by default, and the fetcher lives in the app layer rather
-than in `georay_geo`, so `--selftest` is still a pure numeric suite with
-nothing to reach out to. It is rate-limited, capped per session
-(`--tile-limit`), identifies itself, and writes into the same cache
-`scripts/fetch_map.py` uses — neither re-downloads what the other already has.
+All three are flat, and that is deliberate. Draping a map over relief distorts
+it exactly where it is most worth reading, and a map you cannot read is not
+worth the parallax. **Relief has not been thrown away** — the terrain is still
+what rays are intersected against, every geolocation is still fully
+terrain-aware, and the height map shows the relief as colour and contours
+rather than as geometry. The one thing to know is that the drawn ray ends at
+the hit's true 3D position while the ground is drawn at the plane, so over
+mountains the marker sits visibly above the map. The coordinates are
+unaffected.
+
+Flattening is also what makes the chunking tractable: a chunk is two triangles
+and one texture rather than a patch of heightfield with its own seams, normals
+and level of detail.
+
+### Tiles arrive while you fly
+
+Online is the default. Missing tiles are requested as the chunk builder finds
+the gaps, fetched on a worker thread, and chunks re-skin as they land — the
+render loop never waits on a socket. `--offline` turns it off for a demo
+without a connection.
+
+The fetcher lives in the app layer rather than in `georay_geo`, so `--selftest`
+is still a pure numeric suite with nothing to reach out to. It is rate-limited,
+capped per session (`--tile-limit`), identifies itself, and writes into the
+same cache `scripts/fetch_map.py` uses — neither re-downloads what the other
+already has.
 
 It shells out to the `curl` binary rather than linking libcurl. That keeps the
-build dependency-free, which is the property this project is organised around,
-and curl handles TLS, redirects, retries and parallelism properly. libcurl is
-the drop-in upgrade if the process boundary ever becomes the limit.
+build dependency-free, and curl handles TLS, redirects, retries and parallelism
+properly. libcurl is the drop-in upgrade if the process boundary ever becomes
+the limit.
+
+The zoom follows the camera: a chunk is skinned at whichever zoom level is
+nearest to what one screen pixel covers on the ground, so the map is sharp at
+any distance without fetching detail nobody can see.
 
 ### Pre-fetching
 
-Not required, but useful before a demo or somewhere without connectivity:
+Not required any more, but useful before a demo or somewhere without
+connectivity:
 
 ```bash
 scripts/fetch_map.py --along missions/berlin-survey.plan --window 900 --zoom 17
@@ -261,27 +284,25 @@ scripts/fetch_map.py --region 51.36,11.27,53.56,14.77 --zoom 12 --source basemap
 
 | `--source` | What you get |
 | --- | --- |
-| `esri` | Satellite imagery, to z19 — makes the camera view look like a real UAV feed |
-| `basemapde` | Official German cartography in muted greyscale, to z18. Far calmer than OSM's standard style. Germany only |
+| `esri` | Satellite imagery, to z19 |
+| `basemapde` | Official German cartography in muted greyscale, to z18. Germany only |
 | `basemapde-colour` | The same, in colour |
 | `osm` | OpenStreetMap's standard style — busiest of the four |
 
 Tile servers have usage policies and they are not alike: OpenStreetMap's is
 donated volunteer infrastructure and treats runs over 250 tiles as bulk
 downloading, while basemap.de is a government open-data service funded to be
-used. `--max-tiles` defaults to OSM's line; raise it deliberately.
-
-The attribution for whichever source is visible is drawn on screen.
+used. `--max-tiles` defaults to OSM's line; raise it deliberately. The
+attribution for whichever source is visible is drawn on screen.
 
 ### What this is not
 
-Vector tiles. Tiles are raster, so a zoom level has a native resolution and
-magnifying past it blurs — zoom-matching avoids that by fetching a finer level
-rather than by being resolution-independent. True crispness at any
-magnification needs vector tiles (basemap.de and OpenFreeMap both serve them,
-free and without a key) plus a renderer for them: geometry decoding,
-tessellation, line stroking and label placement. That is a different and much
-larger piece of work.
+Vector tiles. Tiles are raster, so a zoom level has a native resolution;
+zoom-matching avoids blur by fetching a finer level rather than by being
+resolution-independent. True crispness at any magnification needs vector tiles
+(basemap.de and OpenFreeMap both serve them, free and without a key) plus a
+renderer for them: geometry decoding, tessellation, line stroking and label
+placement. That is a different and much larger piece of work.
 
 ## Real elevation data
 
@@ -398,8 +419,8 @@ continental distances.
 | `1` `2` `3` `4` | Synthetic terrain: flat, hills, valley, mountains |
 | `0` | Back to the real DEM terrain, if loaded |
 | `[` `]`, `,` `.`, `-` `=`, `;` `'` | Camera zoom, height AGL, ground speed, orbit radius |
-| `M`, `TAB`, `V` | Map layer (satellite / street / off), focus camera pane, enlarge it |
-| `D`, `F`, `C`, `X` | Lens distortion, footprint, contours, flat-earth error |
+| `M`, `TAB`, `V` | Ground mode (map / satellite / height), focus camera pane, enlarge it |
+| `D`, `F`, `X` | Lens distortion, footprint, flat-earth error |
 | `R`, `F12`, `H`, `Q` | Reset, screenshot, help, quit |
 
 ## How the geolocation works

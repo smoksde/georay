@@ -109,18 +109,30 @@ camera underground the ray marcher returns its own position, which is
 frame-independent for trivial reasons and made the test vacuous the first time
 it was written.
 
+## The ground is flat on purpose
+
+`GroundChunks` renders the ground as flat chunks, not as a heightfield.
+Relief still exists - `Terrain` is what rays are intersected against and what
+the height-map mode colours - it has just stopped being geometry, because
+draping a map over relief distorts it where it most needs reading.
+
+Three consequences to keep in mind. Chunk quads wind the opposite way to the
+obvious one (texture v runs south, ENU y runs north), so a grid wound in
+texture order is culled away entirely. New chunks and retries of incomplete
+ones need separate budgets, or a view full of half-covered chunks spends every
+frame retrying and never creates the ones beyond it. And a chunk is only worth
+rebuilding once the fetcher has actually delivered something.
+
 ## Streaming
 
-Both caches are bounded, for the same reason - the aircraft travels and does
-not come back. `DemSource` holds at most `kDefaultTileLimit` one-degree tiles
-(26 MB each) and `TileCache` a few hundred decoded map tiles, both
-least-recently-used first out.
+Three caches, all bounded, for the same reason - the camera moves and does not
+come back. `DemSource` holds a few one-degree tiles (26 MB each), `TileCache`
+a few hundred decoded map tiles, and `GroundChunks` a few dozen chunks
+(3 MB of texture each), all least-recently-used or furthest-first out.
 
-The map texture covers a `MercatorBox`, and its UVs are a function of that box
-alone. That is deliberate and load-bearing: it means the texture can be
-re-stitched at any zoom without rebuilding the terrain mesh, which is what
-makes zoom-matched detail possible at all. Change what the box *is* - a
-re-anchor - and the mesh must be rebuilt with it, in that order.
+A chunk's texture covers a `MercatorBox` and its UVs are a function of that box
+alone, so a chunk can be re-skinned at any zoom without its mesh changing.
+Chunk geometry is in ENU, so a frame re-anchor invalidates all of it.
 
 ## Process
 

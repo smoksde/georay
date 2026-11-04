@@ -71,14 +71,17 @@ public:
         // Fetch missing tiles while flying. Off unless asked for: the
         // self-test and CI must never touch the network, and nobody should
         // discover they are downloading by accident.
-        bool online = false;
+        // On by default. This is used with a connection, and a map that
+        // fills itself in is the expected behaviour rather than an opt-in;
+        // --offline is there for a demo on a train.
+        bool online = true;
         int online_tile_limit = 4000;
         double online_delay_s = 0.25;
 
         // A QGroundControl .plan or a QGC WPL .waypoints list to fly.
         std::string mission_path;
 
-        // Which layer to start on: "satellite", "street" or "off".
+        // Which ground skin to start on: "map", "satellite" or "height".
         std::string map_mode = "satellite";
 
         // Advance the simulation by this many seconds before the first frame
@@ -131,10 +134,7 @@ private:
     void buildStructures();
     // Whether the synthetic landmark towers belong in the scene at all.
     bool showStructures() const;
-    bool mapVisible() const;
-    bool mapLayerHasPixels(int layer) const;
-    bool mapIsImagery() const;
-    const char* mapLayerName() const;
+    bool mapIsImagery() const { return ground_mode_ == GroundMode::Satellite; }
     void resetSimulation();
     // Builds the ENU frame and the terrain, from real elevation data when a
     // DEM directory was given and from the synthetic generator otherwise.
@@ -165,12 +165,9 @@ private:
     // backed by a library. Returns true if anything changed.
     // Re-stitches whichever layers need it: when the frame has moved, or
     // when the view has changed enough to want a different zoom.
-    bool updateMapTextures(bool force);
-    // The zoom whose detail matches what is currently on screen.
-    int wantedMapZoom(const TileSource& source) const;
-    // The geographic box the map textures cover - the terrain window's own
-    // extent, so the two line up edge to edge.
-    MercatorBox mapBox() const;
+    // Ground skin, cycled by M.
+    GroundMode groundMode() const { return ground_mode_; }
+    void cycleGroundMode();
     // Re-anchors when the aircraft has drifted far enough from the origin
     // that the terrain window no longer comfortably surrounds it.
     void maybeReanchor();
@@ -215,6 +212,8 @@ private:
     bool running_ = false;
     Options options_;
     int frames_rendered_ = 0;
+    size_t last_resident_chunks_ = 0;
+    int frames_since_chunk_change_ = 0;
 
     std::unique_ptr<Scene> scene_;
     ViewCamera view_camera_;
@@ -257,11 +256,6 @@ private:
     std::string reported_fetch_error_;
     double seconds_since_restitch_ = 0.0;
     const TileSource* map_sources_[2] = {nullptr, nullptr};
-    MapTexture map_textures_[2];
-    MapTexture::Result map_results_[2];
-    MercatorBox map_box_;
-    int map_zoom_[2] = {0, 0};
-    bool map_is_imagery_[2] = {true, false};
     Terrain::DemLoadReport dem_report_;
     bool using_dem_ = false;
     // A flat ground model at the frame origin's elevation, used only to
@@ -300,12 +294,11 @@ private:
     bool paused_ = false;
     bool show_help_ = true;
     bool show_footprint_ = true;
-    bool show_contours_ = true;
     bool show_flat_comparison_ = true;
     bool large_inset_ = false;
     // Which map layer is draped, or -1 for bare terrain. M cycles through
     // whichever layers actually loaded.
-    int map_layer_ = 0;
+    GroundMode ground_mode_ = GroundMode::Satellite;
     // Which camera pane V enlarges, and TAB switches.
     int focused_camera_ = kSimulatedCamera;
     bool follow_aircraft_ = true;

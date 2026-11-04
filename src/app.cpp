@@ -307,33 +307,26 @@ bool App::buildWorld() {
                       << tileSourceNames() << "\n";
             continue;
         }
-        map_is_imagery_[layer] = map_sources_[layer]->imagery;
+        std::cout << "georay: " << layer_names[layer] << " source "
+                  << map_sources_[layer]->name << " (to zoom "
+                  << map_sources_[layer]->max_zoom << ")\n";
     }
 
-    map_box_ = mapBox();
-    updateMapTextures(/*force=*/true);
-    for (int layer = 0; layer < 2; ++layer) {
-        if (!map_sources_[layer]) continue;
-        const MapTexture::Result& r = map_results_[layer];
-        std::cout << "georay: " << layer_names[layer] << " " << map_sources_[layer]->name
-                  << " z" << r.zoom << " " << r.width << "x" << r.height << " "
-                  << r.metres_per_pixel << " m/px, " << r.tiles_present << "/"
-                  << r.tiles_wanted << " tiles";
-        if (r.tiles_present == 0) std::cout << " - nothing cached for this area";
-        std::cout << "\n";
+    scene_->ground().setSources(map_sources_[1], map_sources_[0]);
+    if (options_.map_mode == "map" || options_.map_mode == "street") {
+        ground_mode_ = GroundMode::Map;
+    } else if (options_.map_mode == "height" || options_.map_mode == "heightmap") {
+        ground_mode_ = GroundMode::HeightMap;
+    } else {
+        ground_mode_ = GroundMode::Satellite;
     }
-
-    // Start on the requested layer, falling back to whichever has pixels -
-    // asking for satellite and silently getting bare terrain because nothing
-    // was cached would be confusing.
-    map_layer_ = -1;
-    if (options_.map_mode == "street" && map_results_[1].tiles_present > 0) {
-        map_layer_ = 1;
-    } else if (options_.map_mode != "off") {
-        for (int layer = 0; layer < 2; ++layer) {
-            if (map_results_[layer].tiles_present > 0) { map_layer_ = layer; break; }
-        }
+    // A mode whose source never resolved would show bare chunks forever.
+    if (ground_mode_ == GroundMode::Satellite && !map_sources_[0]) {
+        ground_mode_ = map_sources_[1] ? GroundMode::Map : GroundMode::HeightMap;
+    } else if (ground_mode_ == GroundMode::Map && !map_sources_[1]) {
+        ground_mode_ = map_sources_[0] ? GroundMode::Satellite : GroundMode::HeightMap;
     }
+    scene_->ground().setMode(ground_mode_);
 
     if (!options_.mission_path.empty()) loadMissionFile(options_.mission_path);
 
@@ -346,92 +339,7 @@ bool App::buildWorld() {
                      "or --geoid.\n";
     }
 
-    rebuildTerrainMesh();
     return true;
-}
-
-MercatorBox App::mapBox() const {
-    // The terrain window's own extent, so map and ground line up edge to
-    // edge. Slightly larger, because the terrain mesh reaches exactly to the
-    // half-extent and a texture that stopped there would show its clamp
-    // colour along the rim.
-    return MercatorBox::around(frame_origin_.latitude_deg, frame_origin_.longitude_deg,
-                               terrain_->halfExtent() * 1.02);
-}
-
-int App::wantedMapZoom(const TileSource& source) const {
-    // What one screen pixel covers on the ground, from whichever of the two
-    // views is more demanding. The simulated camera usually wins - it is
-    // close to the ground - but when it is pointed at the horizon the 3D view
-    // is the one that needs the detail.
-    const double view_mpp = 2.0 * double(view_camera_.distance()) *
-                            std::tan(glm::radians(55.0) * 0.5) / std::max(height_, 1);
-    double camera_mpp = view_mpp;
-    if (hover_result_.valid && hover_result_.gsd_m > 0.0) {
-        camera_mpp = hover_result_.gsd_m;
-    } else if (pick_result_.valid && pick_result_.gsd_m > 0.0) {
-        camera_mpp = pick_result_.gsd_m;
-    }
-    const double wanted = std::min(view_mpp, camera_mpp);
-
-    // Two ceilings, and the lower wins.
-    //
-    // What the view wants, rounded up so the map is never coarser than the
-    // screen - and what the stitched texture can actually hold, rounded
-    // *down* for the opposite reason. A zoom finer than the pixel budget
-    // downloads four times the tiles for a picture that gets averaged back
-    // to the same thing.
-    const int from_view = zoomForResolution(frame_origin_.latitude_deg, wanted,
-                                            source.min_zoom, source.max_zoom);
-    const double box_width_m = terrain_->halfExtent() * 2.04;
-    const double budget_mpp = box_width_m / std::max(options_.map_max_pixels, 256);
-    const int from_budget = zoomNotFinerThan(frame_origin_.latitude_deg, budget_mpp,
-                                             source.min_zoom, source.max_zoom);
-    return std::min(from_view, from_budget);
-}
-
-bool App::updateMapTextures(bool force) {
-    if (!tiles_) return false;
-    bool changed = false;
-
-    for (int layer = 0; layer < 2; ++layer) {
-        const TileSource* source = map_sources_[layer];
-        if (!source) continue;
-
-        // Only the visible layer is worth stitching. The other one costs the
-        // same decode and upload for pixels nobody is looking at, and M
-        // rebuilds it on the spot when it becomes visible.
-        if (!force && map_layer_ != layer) continue;
-
-        const int zoom = wantedMapZoom(*source);
-        if (!force && zoom == map_zoom_[layer] && map_results_[layer].ok) continue;
-
-        map_results_[layer] = map_textures_[layer].build(*tiles_, *source, map_box_, zoom,
-                                                         options_.map_max_pixels);
-        map_zoom_[layer] = map_results_[layer].zoom;
-        changed = true;
-
-        // Ask for whatever was missing. The fetcher deduplicates and caps
-        // itself, so repeating a request for a tile the server does not have
-        // costs nothing.
-        if (fetcher_) {
-            for (const auto& tile : map_results_[layer].missing) {
-                fetcher_->request(*source, map_results_[layer].zoom, tile.first, tile.second);
-            }
-        }
-
-        if (map_results_[layer].tiles_present == 0) {
-            scene_->clearMapLayer(layer);
-            continue;
-        }
-        if (!scene_->setMapTexture(layer, map_textures_[layer].pixels().data(),
-                                   map_textures_[layer].width(),
-                                   map_textures_[layer].height())) {
-            std::cerr << "georay: " << scene_->error() << "\n";
-            scene_->clearMapLayer(layer);
-        }
-    }
-    return changed;
 }
 
 double App::reanchorThreshold() const {
@@ -474,12 +382,10 @@ void App::reanchorFrame(const Geodetic& new_origin) {
     // so the world is as large as the tiles on disk, not as large as one
     // window.
     if (dem_) loadDemTerrain();
-    // The box moves with the frame, so the textures and the UVs that index
-    // them both have to be rebuilt - in that order, since the mesh bakes the
-    // box the textures were stitched for.
-    map_box_ = mapBox();
-    updateMapTextures(/*force=*/true);
-    rebuildTerrainMesh();
+    // Every chunk's geometry is in ENU, and ENU has just come to mean
+    // something else. They are rebuilt around the new origin on the next
+    // update, a couple at a time.
+    scene_->ground().invalidateGeometry();
 
     // Put the frame-dependent state back where it was on the ground.
     track_target_geodetic_ = track;
@@ -496,8 +402,7 @@ void App::reanchorFrame(const Geodetic& new_origin) {
     view_target_geodetic_ = view_target;
     have_view_target_ = true;
     const glm::dvec3 view_enu = frame_.fromGeodetic(view_target);
-    view_camera_.setTarget(glm::vec3(float(view_enu.x), float(view_enu.y),
-                                     float(terrain_->sampleHeight(view_enu.x, view_enu.y))));
+    view_camera_.setTarget(glm::vec3(float(view_enu.x), float(view_enu.y), 0.0f));
 
     // The route's ENU coordinates moved too; rebuild it from the plan, whose
     // waypoints are geodetic and therefore unaffected.
@@ -528,10 +433,6 @@ void App::maybeReanchor() {
 
     reanchorFrame(Geodetic(uav_.position.latitude_deg, uav_.position.longitude_deg, 0.0));
     reanchor_distance_m_ = horizontalDistance(frame_origin_, uav_.position);
-}
-
-void App::rebuildTerrainMesh() {
-    scene_->buildTerrain(*terrain_, frame_, map_box_);
 }
 
 bool App::loadMissionFile(const std::string& path) {
@@ -591,25 +492,22 @@ bool App::loadDemTerrain() {
     return using_dem_;
 }
 
-bool App::mapVisible() const { return map_layer_ >= 0 && scene_->hasMap(map_layer_); }
-
-bool App::mapLayerHasPixels(int layer) const {
-    return layer >= 0 && layer < 2 && map_sources_[layer] && map_results_[layer].tiles_present > 0;
-}
-
-bool App::mapIsImagery() const {
-    return map_layer_ >= 0 && map_layer_ < 2 && map_is_imagery_[map_layer_];
-}
-
-const char* App::mapLayerName() const {
-    if (map_layer_ < 0) return "OFF - BARE TERRAIN";
-    return map_layer_ == 0 ? "SATELLITE" : "STREET MAP";
+void App::cycleGroundMode() {
+    // Map -> satellite -> height map, skipping a tile-backed mode whose
+    // source never resolved so the key always does something visible.
+    for (int step = 0; step < 3; ++step) {
+        ground_mode_ = GroundMode((int(ground_mode_) + 1) % 3);
+        if (ground_mode_ == GroundMode::HeightMap) break;
+        if (ground_mode_ == GroundMode::Map && map_sources_[1]) break;
+        if (ground_mode_ == GroundMode::Satellite && map_sources_[0]) break;
+    }
+    scene_->ground().setMode(ground_mode_);
 }
 
 bool App::showStructures() const {
     // They exist to give synthetic terrain recognisable features with real
     // parallax. Real elevation data and real imagery already have both.
-    return !using_dem_ && !mapLayerHasPixels(0) && !mapLayerHasPixels(1);
+    return !using_dem_ && !map_sources_[0] && !map_sources_[1];
 }
 
 void App::buildStructures() {
@@ -679,8 +577,7 @@ void App::resetSimulation() {
             hi = glm::max(hi, p);
         }
         const glm::dvec3 centre = (lo + hi) * 0.5;
-        target = glm::vec3(float(centre.x), float(centre.y),
-                           float(terrain_->sampleHeight(centre.x, centre.y)));
+        target = glm::vec3(float(centre.x), float(centre.y), 0.0f);
         distance = std::max(distance, float(glm::length(glm::dvec2(hi - lo))) * 0.9f);
     }
     view_camera_.setTarget(target);
@@ -761,27 +658,15 @@ void App::onKeyDown(const SDL_Keysym& key) {
         case SDLK_f:
             show_footprint_ = !show_footprint_;
             break;
-        case SDLK_c:
-            show_contours_ = !show_contours_;
-            break;
         case SDLK_x:
             show_flat_comparison_ = !show_flat_comparison_;
             break;
         case SDLK_v:
             large_inset_ = !large_inset_;
             break;
-        case SDLK_m: {
-            // Cycle satellite -> street -> off, skipping layers that are not
-            // loaded, so M always does something visible.
-            for (int step = 0; step < 3; ++step) {
-                map_layer_ = (map_layer_ + 2) % 3 - 1;  // 0 -> 1 -> -1 -> 0
-                if (map_layer_ < 0 || map_sources_[map_layer_]) break;
-            }
-            // The layer just switched to may never have been stitched, since
-            // only the visible one is kept up to date.
-            if (map_layer_ >= 0) updateMapTextures(/*force=*/true);
+        case SDLK_m:
+            cycleGroundMode();
             break;
-        }
         case SDLK_TAB:
             // Which pane V enlarges. Only meaningful with two of them.
             focused_camera_ = (focused_camera_ + 1) % kCameraPanes;
@@ -809,7 +694,6 @@ void App::onKeyDown(const SDL_Keysym& key) {
                                            Terrain::Kind::Valley, Terrain::Kind::Mountains};
             terrain_->generate(kinds[key.sym - SDLK_1]);
             using_dem_ = false;
-            rebuildTerrainMesh();
             // The pick refers to the old surface, so it is no longer an
             // answer to anything.
             have_pick_ = false;
@@ -821,7 +705,6 @@ void App::onKeyDown(const SDL_Keysym& key) {
             // measured and synthetic ground on the same scene is the most
             // direct way to see how much the terrain model actually matters.
             if (dem_ && loadDemTerrain()) {
-                rebuildTerrainMesh();
                 have_pick_ = false;
             }
             break;
@@ -1063,17 +946,22 @@ void App::update(double dt) {
         // itself: that is the subject, and keeping it centred is what makes
         // the footprint and the rays readable while the aircraft moves.
         const glm::dvec2 target = flight_.trackTargetEnu();
-        view_camera_.setTarget(glm::vec3(float(target.x), float(target.y),
-                                         float(terrain_->sampleHeight(target.x, target.y))));
+        // At the ground plane, not at the terrain height: the ground renders
+        // flat, so aiming at a relief that is not drawn would leave the
+        // subject off-centre by the local elevation.
+        view_camera_.setTarget(glm::vec3(float(target.x), float(target.y), 0.0f));
         view_target_geodetic_ = track_target_geodetic_;
         have_view_target_ = true;
     }
 
-    // Tiles arriving in the background change what a stitch would produce.
-    // Throttled, because a stitch decodes and uploads a few hundred tiles and
-    // doing it on every delivery would stutter the whole flight.
-    seconds_since_restitch_ += dt;
-    if (fetcher_ && seconds_since_restitch_ > 1.0) {
+    // Stream the ground around wherever the camera is looking. This is the
+    // whole of the loading decision: chunks near the view appear, chunks
+    // behind it are dropped, and missing tiles are asked for as they are
+    // found.
+    scene_->ground().update(view_camera_, frame_, *terrain_, dem_.get(), geoid_, *tiles_,
+                            fetcher_.get(), terrain_->halfExtent() * 4.0);
+
+    if (fetcher_) {
         // Surface a fetcher problem once rather than per batch: a wrong URL
         // or a missing curl otherwise shows up only as a map that never
         // arrives, which looks like a slow network.
@@ -1082,16 +970,7 @@ void App::update(double dt) {
             reported_fetch_error_ = error;
             std::cerr << "georay: tile fetch: " << error << "\n";
         }
-
-        const int delivered = fetcher_->fetched();
-        if (delivered != last_seen_fetched_) {
-            last_seen_fetched_ = delivered;
-            seconds_since_restitch_ = 0.0;
-            updateMapTextures(/*force=*/true);
-        }
     }
-    // The view may have moved enough to want a different zoom.
-    updateMapTextures(/*force=*/false);
 
     if (show_footprint_) {
         footprint_ = computeFootprint(uav_, camera_, *terrain_, frame_, 10);
@@ -1132,13 +1011,10 @@ void App::renderWorldView() {
     const glm::mat4 view_projection = view_camera_.viewProjection();
     const glm::vec3 eye = view_camera_.position();
 
-    scene_->beginWorld(view_projection, eye, *terrain_, show_contours_ ? 25.0f : 0.0f,
-                       map_layer_, mapIsImagery());
-    scene_->drawTerrain();
+    scene_->beginWorld(view_projection, eye, mapIsImagery());
+    scene_->drawGround();
 
     PrimitiveBatch& lines = scene_->world();
-    // A grid drawn over a readable map is clutter, not scale.
-    if (!mapVisible()) scene_->addGroundGrid(*terrain_, 200.0);
     scene_->addFrameAxes(300.0);
 
     // Structures, as wireframe boxes standing on the surface. Only on
@@ -1210,12 +1086,10 @@ void App::renderSimulatedCamera() {
         camera_.glProjectionMatrix(1.0, 60000.0) * cameraViewMatrix();
     const glm::vec3 eye = toFloat(cameraPositionEnu(uav_, frame_));
 
-    scene_->beginWorld(view_projection, eye, *terrain_, show_contours_ ? 25.0f : 0.0f,
-                       map_layer_, mapIsImagery());
-    scene_->drawTerrain();
+    scene_->beginWorld(view_projection, eye, mapIsImagery());
+    scene_->drawGround();
 
     PrimitiveBatch& lines = scene_->world();
-    if (!mapVisible()) scene_->addGroundGrid(*terrain_, 200.0);
     for (const Structure& s : showStructures() ? structures_ : std::vector<Structure>{}) {
         const double base = terrain_->sampleHeight(s.position_enu.x, s.position_enu.y);
         const glm::vec3 centre(float(s.position_enu.x), float(s.position_enu.y),
@@ -1373,7 +1247,7 @@ void App::renderHud() {
         const bool show_gaps = using_dem_ && dem_report_.posts_filled > 0 && want(1.0f);
         const bool show_dem = using_dem_ && want(1.0f);
         const bool show_map_rows =
-            (mapLayerHasPixels(0) || mapLayerHasPixels(1)) && want(mapVisible() ? 2.0f : 1.0f);
+            want(2.0f);
         const bool show_anchor = using_dem_ && want(1.0f);
         const bool show_window = map_sources_[0] != nullptr && want(1.0f);
         // Last, because the route it describes is already drawn in the 3D
@@ -1394,18 +1268,11 @@ void App::renderHud() {
         c.row("TERRAIN", terrain_->sourceName(),
               using_dem_ ? colours::text_good : colours::text_value);
         if (show_map_rows) {
-            c.row("MAP MODE", mapLayerName(),
-                  mapVisible() ? colours::text_good : colours::text_dim);
-            if (mapVisible()) {
-                // Ground resolution against the camera's own GSD is the
-                // number that says whether a finer zoom could show you
-                // anything. Below about one map pixel per camera pixel the
-                // view is magnifying the map rather than resolving ground.
-                const MapTexture::Result& r = map_results_[map_layer_];
-                c.row("MAP RES", num(r.metres_per_pixel, 2) + " M/PX Z" +
-                                     std::to_string(r.zoom),
-                      colours::text_value);
-            }
+            c.row("GROUND", groundModeName(ground_mode_), colours::text_good);
+            const GroundChunks& ground = scene_->ground();
+            c.row("DETAIL", num(ground.metresPerPixel(), 2) + " M/PX Z" +
+                                std::to_string(ground.zoom()),
+                  colours::text_value);
         }
         if (show_anchor) {
             // The floating origin, made visible. Without this the frame
@@ -1417,16 +1284,18 @@ void App::renderHud() {
                   colours::text_dim);
         }
         if (show_window) {
-            // Tile coverage for the visible layer. Anything short of complete
-            // means grey holes in the map, which is a missing-data condition
-            // and not a rendering fault.
-            const int layer = map_layer_ >= 0 ? map_layer_ : 0;
-            const MapTexture::Result& r = map_results_[layer];
-            const bool complete = r.tiles_wanted > 0 && r.tiles_present == r.tiles_wanted;
-            c.row("MAP TILES", std::to_string(r.tiles_present) + "/" +
-                                   std::to_string(r.tiles_wanted) +
-                                   (complete ? "" : "  " + num(r.coverage() * 100.0, 0) + "%"),
-                  complete ? colours::text_dim : colours::text_warn);
+            // Chunk streaming, made visible. Pending chunks are ones whose
+            // tiles have not arrived yet, which is a loading state and not a
+            // fault - but it has to be distinguishable from a stall.
+            const GroundChunks& ground = scene_->ground();
+            const int pending = ground.pendingCount();
+            std::string value = std::to_string(ground.readyCount()) + "/" +
+                                std::to_string(int(ground.residentCount())) + " CHUNKS";
+            if (fetcher_) {
+                const int queued = fetcher_->pending();
+                if (queued > 0) value += "  " + std::to_string(queued) + " Q";
+            }
+            c.row("LOADED", value, pending > 0 ? colours::text_warn : colours::text_dim);
         }
         if (show_mission) {
             c.blank();
@@ -1640,9 +1509,9 @@ void App::renderHud() {
         // fetched it gets credited wherever it is shown. Drawn whenever the
         // map is visible, at the bottom of the window where it is out of the
         // way but not hidden.
-        if (mapVisible() && map_sources_[map_layer_] &&
-            !map_sources_[map_layer_]->attribution.empty()) {
-            const std::string credit = map_sources_[map_layer_]->attribution;
+        const TileSource* credit_source = scene_->ground().activeSource();
+        if (credit_source && !credit_source->attribution.empty()) {
+            const std::string credit = credit_source->attribution;
             const float credit_h = text.lineHeight(TextRenderer::kSmall);
             const float width = text.textWidth(credit, TextRenderer::kSmall) + 10.0f;
             // Just above the camera panes rather than along the bottom edge,
@@ -1683,10 +1552,9 @@ void App::renderHud() {
             "",
             "D                    LENS DISTORTION",
             "F                    FOOTPRINT",
-            "C                    CONTOUR LINES",
             "X                    FLAT-EARTH ERROR",
             "V                    CAMERA VIEW SIZE",
-            "M                    MAP / SATELLITE / OFF",
+            "M                    MAP / SATELLITE / HEIGHT",
             "TAB                  FOCUS CAMERA PANE",
             "R                    RESET",
             "F12                  SCREENSHOT",
@@ -1800,7 +1668,25 @@ int App::run() {
             fps_frames = 0;
         }
 
-        if (!options_.screenshot_path.empty() && frames_rendered_ >= options_.screenshot_frames) {
+        // A screenshot has to wait for the ground to arrive. Chunks are built
+        // a few per frame on purpose, so capturing on frame four would
+        // photograph an empty plane - and capturing as soon as the first few
+        // are ready photographs a patch, because the resident set is still
+        // growing. Settled means both: nothing pending, and nothing new
+        // appearing for a while.
+        const size_t resident = scene_->ground().residentCount();
+        if (resident != last_resident_chunks_) {
+            last_resident_chunks_ = resident;
+            frames_since_chunk_change_ = 0;
+        } else {
+            ++frames_since_chunk_change_;
+        }
+        const bool ground_settled = scene_->ground().pendingCount() == 0 && resident > 0 &&
+                                    frames_since_chunk_change_ > 45;
+        const bool waited_long_enough =
+            frames_rendered_ >= options_.screenshot_frames &&
+            (ground_settled || frames_rendered_ > 400);
+        if (!options_.screenshot_path.empty() && waited_long_enough) {
             writeScreenshot(options_.screenshot_path);
             running_ = false;
         }

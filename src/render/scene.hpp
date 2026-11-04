@@ -17,6 +17,7 @@
 #include "geo/camera_model.hpp"
 #include "geo/geolocate.hpp"
 #include "geo/mercator.hpp"
+#include "render/groundchunks.hpp"
 #include "geo/pose.hpp"
 #include "geo/terrain.hpp"
 #include "gl/mesh.hpp"
@@ -65,45 +66,18 @@ public:
     bool initialise();
     const std::string& error() const { return error_; }
 
-    // Up to two map layers can be draped: in practice satellite imagery and
-    // a street map of the same ground, switchable at runtime.
-    static constexpr int kMapLayers = 2;
-
-    // Rebuilds the terrain surface mesh. Called once at start-up and again
-    // whenever the terrain changes.
-    //
-    // `frame` and `map` are needed together: the map's texture coordinates
-    // are computed per post from that post's own latitude and longitude,
-    // which only the frame can supply. Pass a null map for untextured terrain.
-    // `box` fixes the geographic extent the map layers cover. Texture
-    // coordinates come from it alone, so a layer can be re-stitched at any
-    // zoom afterwards without the mesh being rebuilt.
-    void buildTerrain(const Terrain& terrain, const EnuFrame& frame, const MercatorBox& box);
-
-    // Up to two map layers - in practice satellite imagery and a street map
-    // of the same ground, switchable at runtime. Call before buildTerrain,
-    // which bakes the texture coordinates that index them.
-    //
-    // Returns false and sets error() when the raster cannot be uploaded: too
-    // large for the driver, or out of memory. Both otherwise present as
-    // untextured terrain, indistinguishable from a missing file.
-    // Uploads RGB pixels as a layer's texture. The caller owns the stitching;
-    // this only moves bytes to the GPU.
-    bool setMapTexture(int layer, const unsigned char* rgb, int width, int height);
-    void clearMapTextures();
-    void clearMapLayer(int layer);
-    bool hasMap(int layer) const {
-        return layer >= 0 && layer < kMapLayers && map_textures_[layer] != 0;
-    }
+    // The ground, as flat chunks streamed around the camera.
+    GroundChunks& ground() { return ground_; }
+    const GroundChunks& ground() const { return ground_; }
 
     // --- world pass -------------------------------------------------------
     // `map_layer` selects which raster to drape, or -1 for none.
     // `imagery` tells the shader whether that layer is a photograph or a
     // drawn map, which changes how much shading and contouring it gets.
     void beginWorld(const glm::mat4& view_projection, const glm::vec3& eye_position,
-                    const Terrain& terrain, float contour_interval_m, int map_layer,
                     bool imagery);
-    void drawTerrain();
+    // Draws every resident ground chunk.
+    void drawGround();
     PrimitiveBatch& world() { return world_lines_; }
     void endWorld();
 
@@ -118,7 +92,6 @@ public:
     // Each of these adds to the world line batch; they are grouped here
     // because they are about the simulation's geometry rather than about GL.
 
-    void addGroundGrid(const Terrain& terrain, double spacing_m);
     void addFrameAxes(double length_m);
     // `terrain` is only used to drop a plumb line to the ground beneath the
     // aircraft, which is what makes its horizontal position readable in a
@@ -148,8 +121,7 @@ private:
     std::unique_ptr<Shader> line_shader_;
     std::unique_ptr<Shader> text_shader_;
 
-    SurfaceMesh terrain_mesh_;
-    GLuint map_textures_[kMapLayers] = {0, 0};
+    GroundChunks ground_;
     PrimitiveBatch world_lines_{PrimitiveBatch::Mode::Lines};
     PrimitiveBatch overlay_lines_{PrimitiveBatch::Mode::Lines};
     PrimitiveBatch overlay_fills_{PrimitiveBatch::Mode::Triangles};

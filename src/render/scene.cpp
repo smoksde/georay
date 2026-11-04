@@ -12,7 +12,7 @@ glm::vec3 toFloat(const glm::dvec3& v) { return glm::vec3(float(v.x), float(v.y)
 
 Scene::Scene() = default;
 
-Scene::~Scene() { clearMapTextures(); }
+Scene::~Scene() = default;
 
 bool Scene::initialise() {
     terrain_shader_ = std::make_unique<Shader>(shaderPath("terrain.vert"),
@@ -31,150 +31,20 @@ bool Scene::initialise() {
     return true;
 }
 
-bool Scene::setMapTexture(int layer, const unsigned char* rgb, int width, int height) {
-    if (layer < 0 || layer >= kMapLayers || !rgb || width < 1 || height < 1) return false;
 
-    // A texture larger than the driver's limit does not fail loudly - the
-    // upload is simply dropped and the terrain renders untextured, which
-    // looks like the map was never found. Check first and say so.
-    GLint max_size = 0;
-    glGetIntegerv(GL_MAX_TEXTURE_SIZE, &max_size);
-    if (width > max_size || height > max_size) {
-        error_ = "map texture is " + std::to_string(width) + "x" + std::to_string(height) +
-                 " but this GPU allows at most " + std::to_string(max_size);
-        return false;
-    }
 
-    if (map_textures_[layer] == 0) glGenTextures(1, &map_textures_[layer]);
-    glBindTexture(GL_TEXTURE_2D, map_textures_[layer]);
-    glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB8, width, height, 0, GL_RGB, GL_UNSIGNED_BYTE, rgb);
 
-    if (glGetError() == GL_OUT_OF_MEMORY) {
-        glDeleteTextures(1, &map_textures_[layer]);
-        map_textures_[layer] = 0;
-        error_ = "the GPU could not hold a " + std::to_string(width) + "x" +
-                 std::to_string(height) + " map texture";
-        return false;
-    }
-
-    // Mipmaps matter here, not as polish: the texture is thousands of pixels
-    // across and the 3D view shows all of it at once, so without them the
-    // minified map is a shimmering mess of aliased lines.
-    glGenerateMipmap(GL_TEXTURE_2D);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-    // Clamp rather than repeat: a tiled map would put a second city next to
-    // the first, which is worse than an honest edge.
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-
-    // Anisotropic filtering if the driver has it. The terrain is usually seen
-    // at a shallow angle, which is exactly the case trilinear filtering blurs
-    // into uselessness - and a blurred map cannot be read.
-    if (GLEW_EXT_texture_filter_anisotropic) {
-        GLfloat max_anisotropy = 1.0f;
-        glGetFloatv(GL_MAX_TEXTURE_MAX_ANISOTROPY_EXT, &max_anisotropy);
-        glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_MAX_ANISOTROPY_EXT,
-                        std::min(max_anisotropy, 8.0f));
-    }
-    glBindTexture(GL_TEXTURE_2D, 0);
-    return true;
-}
-
-void Scene::clearMapLayer(int layer) {
-    if (layer < 0 || layer >= kMapLayers) return;
-    if (map_textures_[layer] != 0) {
-        glDeleteTextures(1, &map_textures_[layer]);
-        map_textures_[layer] = 0;
-    }
-}
-
-void Scene::clearMapTextures() {
-    for (int layer = 0; layer < kMapLayers; ++layer) {
-        if (map_textures_[layer] != 0) {
-            glDeleteTextures(1, &map_textures_[layer]);
-            map_textures_[layer] = 0;
-        }
-    }
-}
-
-void Scene::buildTerrain(const Terrain& terrain, const EnuFrame& frame,
-                         const MercatorBox& box) {
-    const int n = terrain.resolution();
-
-    std::vector<SurfaceVertex> vertices;
-    vertices.reserve(size_t(n) * size_t(n));
-    for (int iy = 0; iy < n; ++iy) {
-        for (int ix = 0; ix < n; ++ix) {
-            const glm::dvec2 p = terrain.gridPosition(ix, iy);
-            const double h = terrain.heightAt(ix, iy);
-            // The analytic normal from sampleNormal() rather than a
-            // face-averaged one, so the shaded surface and the surface the
-            // raycaster intersects are the same surface. A smoothed normal
-            // would make the render disagree with the maths exactly where
-            // the relief is steepest - which is where it matters.
-            const glm::dvec3 nrm = terrain.sampleNormal(p.x, p.y);
-
-            SurfaceVertex vertex{glm::vec3(float(p.x), float(p.y), float(h)), toFloat(nrm), {}};
-            if (box.valid()) {
-                // The post's own position on the ellipsoid, through the full
-                // Web Mercator transform. Doing it here, once per post, is
-                // what keeps the map registered to the ground to within a
-                // pixel across the whole scene.
-                const Geodetic here = frame.toGeodetic(glm::dvec3(p.x, p.y, h));
-                const glm::dvec2 uv = box.uvFor(here.latitude_deg, here.longitude_deg);
-                vertex.map_uv = glm::vec2(float(uv.x), float(uv.y));
-            }
-            vertices.push_back(vertex);
-        }
-    }
-
-    std::vector<unsigned int> indices;
-    indices.reserve(size_t(n - 1) * size_t(n - 1) * 6);
-    for (int iy = 0; iy + 1 < n; ++iy) {
-        for (int ix = 0; ix + 1 < n; ++ix) {
-            const unsigned int a = unsigned(iy * n + ix);
-            const unsigned int b = a + 1;
-            const unsigned int c = a + unsigned(n);
-            const unsigned int d = c + 1;
-            // Counter-clockwise seen from above (+z), matching the +z normals
-            // above, so back-face culling keeps the surface rather than the
-            // underside.
-            indices.insert(indices.end(), {a, b, d, a, d, c});
-        }
-    }
-
-    terrain_mesh_.upload(vertices, indices);
-}
 
 void Scene::beginWorld(const glm::mat4& view_projection, const glm::vec3& eye,
-                       const Terrain& terrain, float contour_interval_m, int map_layer,
                        bool imagery) {
     terrain_shader_->bind();
     terrain_shader_->set("u_view_projection", view_projection);
     terrain_shader_->set("u_camera_position", eye);
-    // A sun from the north-west and fairly high: low enough for relief to
-    // cast obvious shading, high enough that nothing important is in shadow.
-    terrain_shader_->set("u_sun_direction",
-                         glm::normalize(glm::vec3(-0.45f, 0.35f, 0.82f)));
-    terrain_shader_->set("u_height_min", float(terrain.minHeight()));
-    terrain_shader_->set("u_height_max", float(terrain.maxHeight() + 1.0));
-    terrain_shader_->set("u_contour_interval", contour_interval_m);
-
-    const bool mapped = hasMap(map_layer);
-    terrain_shader_->set("u_has_map", mapped ? 1 : 0);
     terrain_shader_->set("u_map_is_imagery", imagery ? 1 : 0);
-    if (mapped) {
-        glActiveTexture(GL_TEXTURE0);
-        glBindTexture(GL_TEXTURE_2D, map_textures_[map_layer]);
-        terrain_shader_->set("u_map", 0);
-    }
-
     pending_view_projection_ = view_projection;
 }
 
-void Scene::drawTerrain() { terrain_mesh_.draw(); }
+void Scene::drawGround() { ground_.draw(*terrain_shader_); }
 
 void Scene::endWorld() {
     line_shader_->bind();
@@ -216,39 +86,6 @@ void Scene::endOverlay() {
     glEnable(GL_DEPTH_TEST);
 }
 
-void Scene::addGroundGrid(const Terrain& terrain, double spacing_m) {
-    if (spacing_m <= 0.0) return;
-    const double extent = terrain.halfExtent();
-    const int steps = int(extent / spacing_m);
-
-    // Draped over the relief, not drawn on a flat plane at some reference
-    // height: a flat grid spends most of its length buried inside hills,
-    // which is both useless and misleading about where the ground is. Each
-    // line is therefore subdivided and each sample lifted just clear of the
-    // surface.
-    const double sub = 50.0;  // metres between samples along a grid line
-    const int sub_steps = int((2.0 * extent) / sub);
-    const float lift = 1.5f;
-
-    auto drape = [&](bool along_north) {
-        for (int i = -steps; i <= steps; ++i) {
-            const double fixed = i * spacing_m;
-            // Every fifth line brighter, so distances are countable at a glance.
-            const glm::vec4 c = (i % 5 == 0) ? colours::grid_major : colours::grid;
-            glm::vec3 previous;
-            for (int k = 0; k <= sub_steps; ++k) {
-                const double moving = -extent + k * sub;
-                const double e = along_north ? fixed : moving;
-                const double n = along_north ? moving : fixed;
-                const glm::vec3 p(float(e), float(n), float(terrain.sampleHeight(e, n)) + lift);
-                if (k > 0) world_lines_.addSegment(previous, p, c);
-                previous = p;
-            }
-        }
-    };
-    drape(true);
-    drape(false);
-}
 
 void Scene::addFrameAxes(double length_m) {
     const float l = float(length_m);

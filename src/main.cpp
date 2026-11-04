@@ -35,9 +35,9 @@ void printUsage() {
         "  --street-map SOURCE           tile source for the drawn-map layer; M switches\n"
         "  --mission FILE                a QGroundControl .plan or QGC WPL .waypoints\n"
         "                                list to fly\n"
-        "  --map-mode MODE               satellite (default), street, or off\n"
+        "  --map-mode MODE               satellite (default), map, or height\n"
         "  --tiles DIR                   tile cache directory (default data/tiles)\n"
-        "  --online                      fetch missing tiles while flying\n"
+        "  --offline                     do not fetch tiles (online is the default)\n"
         "  --advance SECONDS             run the simulation forward before drawing\n"
         "\n"
         "Real elevation data (optional; synthetic terrain is used without it):\n"
@@ -141,6 +141,10 @@ int main(int argc, char** argv) {
             options.online = true;
             continue;
         }
+        if (arg == "--offline") {
+            options.online = false;
+            continue;
+        }
         if (arg == "--tile-limit" && i + 1 < argc) {
             char extra = 0;
             if (std::sscanf(argv[++i], "%d%c", &options.online_tile_limit, &extra) != 1 ||
@@ -156,9 +160,9 @@ int main(int argc, char** argv) {
         }
         if (arg == "--map-mode" && i + 1 < argc) {
             options.map_mode = argv[++i];
-            if (options.map_mode != "satellite" && options.map_mode != "street" &&
-                options.map_mode != "off") {
-                std::cerr << "georay: --map-mode wants satellite, street or off\n";
+            if (options.map_mode != "satellite" && options.map_mode != "map" &&
+                options.map_mode != "height") {
+                std::cerr << "georay: --map-mode wants satellite, map or height\n";
                 return 2;
             }
             continue;

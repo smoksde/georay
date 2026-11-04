@@ -115,6 +115,7 @@ add_executable(georay
     src/gl/shader.cpp
     src/gl/mesh.cpp
     src/gl/text.cpp
+    src/render/groundchunks.cpp
     src/render/scene.cpp
 )
 target_link_libraries(georay
