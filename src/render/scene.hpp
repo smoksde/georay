@@ -74,11 +74,29 @@ public:
     // `map_layer` selects which raster to drape, or -1 for none.
     // `imagery` tells the shader whether that layer is a photograph or a
     // drawn map, which changes how much shading and contouring it gets.
+    // `world_per_pixel_per_metre` converts a screen width in pixels into a
+    // world width at a given distance, which is what lets the overlay lines
+    // keep a constant thickness on screen. Pass 2*tan(fov/2)/viewport_height.
     void beginWorld(const glm::mat4& view_projection, const glm::vec3& eye_position,
-                    bool imagery);
+                    GroundMode mode, bool dark, double world_per_pixel_per_metre);
     // Draws every resident ground chunk.
     void drawGround();
     PrimitiveBatch& world() { return world_lines_; }
+    // Translucent world-space triangles - the imaged area and the frustum
+    // volume. Thin lines alone vanish at a distance; a filled surface still
+    // reads as a shape when it is twenty pixels across.
+    PrimitiveBatch& worldFills() { return world_fills_; }
+
+    // A segment drawn as a camera-facing ribbon of constant screen width.
+    //
+    // GL_LINES cannot be widened in a core profile - glLineWidth above 1 is
+    // not required to do anything, and on most drivers does not - so a line
+    // that has to stay visible from ten kilometres has to be geometry. These
+    // go in the fill batch, under the thin lines.
+    void addThickSegment(const glm::vec3& a, const glm::vec3& b, const glm::vec4& colour,
+                         float width_px);
+    void addThickPolyline(const std::vector<glm::vec3>& points, const glm::vec4& colour,
+                          float width_px, bool closed);
     void endWorld();
 
     // --- overlay pass -----------------------------------------------------
@@ -105,8 +123,10 @@ public:
                           const EnuFrame& frame, const Footprint& footprint,
                           double fallback_length_m);
     void addFootprint(const Footprint& footprint, const Terrain& terrain);
+    // The imaged area as a filled translucent surface, under its outline.
+    void addFootprintFill(const Footprint& footprint, const glm::vec4& colour);
     void addPickRay(const GeolocateResult& result, const Terrain& terrain,
-                    double miss_length_m);
+                    double miss_length_m, double marker_size_m = 25.0);
     void addGroundMarker(const glm::dvec3& enu, const glm::vec4& colour, double size_m);
 
     // A loaded flight plan: the legs, the waypoints, and a plumb line from
@@ -123,6 +143,7 @@ private:
 
     GroundChunks ground_;
     PrimitiveBatch world_lines_{PrimitiveBatch::Mode::Lines};
+    PrimitiveBatch world_fills_{PrimitiveBatch::Mode::Triangles};
     PrimitiveBatch overlay_lines_{PrimitiveBatch::Mode::Lines};
     PrimitiveBatch overlay_fills_{PrimitiveBatch::Mode::Triangles};
     TextRenderer text_;
@@ -132,6 +153,8 @@ private:
     // be given the same transform the terrain was drawn with, without the
     // caller having to pass it twice and risk passing two different ones.
     glm::mat4 pending_view_projection_{1.0f};
+    glm::vec3 eye_{0.0f};
+    double world_per_pixel_per_metre_ = 0.0;
     std::string error_;
 };
 

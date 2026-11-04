@@ -85,6 +85,8 @@ public:
     // needs beyond the terrain itself.
     void addTriangle(const glm::vec3& a, const glm::vec3& b, const glm::vec3& c,
                      const glm::vec4& colour);
+    void addTriangle(const glm::vec3& a, const glm::vec3& b, const glm::vec3& c,
+                     const glm::vec4& ca, const glm::vec4& cb, const glm::vec4& cc);
     void addQuad(const glm::vec2& top_left, const glm::vec2& size, const glm::vec4& colour);
 
     // Uploads whatever has accumulated and draws it.

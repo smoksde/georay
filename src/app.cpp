@@ -492,6 +492,14 @@ bool App::loadDemTerrain() {
     return using_dem_;
 }
 
+double App::overlayScale() const {
+    // Constant apparent size, near enough. A 28 m aircraft is right at the
+    // default standoff and invisible from ten kilometres, and the geolocation
+    // markers have the same problem - the thing you are meant to be looking
+    // at should not be the hardest thing to see.
+    return std::max(1.0, double(view_camera_.distance()) / 700.0);
+}
+
 void App::cycleGroundMode() {
     // Map -> satellite -> height map, skipping a tile-backed mode whose
     // source never resolved so the key always does something visible.
@@ -666,6 +674,9 @@ void App::onKeyDown(const SDL_Keysym& key) {
             break;
         case SDLK_m:
             cycleGroundMode();
+            break;
+        case SDLK_n:
+            dark_ground_ = !dark_ground_;
             break;
         case SDLK_TAB:
             // Which pane V enlarges. Only meaningful with two of them.
@@ -1011,11 +1022,15 @@ void App::renderWorldView() {
     const glm::mat4 view_projection = view_camera_.viewProjection();
     const glm::vec3 eye = view_camera_.position();
 
-    scene_->beginWorld(view_projection, eye, mapIsImagery());
+    // One screen pixel is this many world units per metre of distance, which
+    // is what keeps the overlay ribbons a constant thickness on screen.
+    const double per_pixel = 2.0 * std::tan(glm::radians(55.0) * 0.5) / std::max(height_, 1);
+    scene_->beginWorld(view_projection, eye, ground_mode_, dark_ground_, per_pixel);
     scene_->drawGround();
 
+    const double glyph = overlayScale();
     PrimitiveBatch& lines = scene_->world();
-    scene_->addFrameAxes(300.0);
+    scene_->addFrameAxes(300.0 * glyph);
 
     // Structures, as wireframe boxes standing on the surface. Only on
     // synthetic ground: drawn over real imagery they are inventions sitting
@@ -1034,19 +1049,28 @@ void App::renderWorldView() {
     if (has_mission_ && flight_.hasMission()) {
         scene_->addMissionRoute(flight_.routeEnu(), flight_.currentLeg(), *terrain_);
     }
-    scene_->addAircraft(uav_, frame_, *terrain_, 28.0);
+    scene_->addAircraft(uav_, frame_, *terrain_, 28.0 * glyph);
+    // The frustum is edges only. Filling its volume was tried and dropped:
+    // two of the four side faces are always near edge-on, so they read as
+    // stray triangles rather than as a beam, and the thick edges plus the
+    // filled footprint already say the same thing more clearly.
     scene_->addCameraFrustum(uav_, camera_, frame_, footprint_, 2500.0);
-    if (show_footprint_) scene_->addFootprint(footprint_, *terrain_);
+    if (show_footprint_) {
+        // The imaged area is the thing this tool is about, so it carries
+        // the strongest fill of anything on screen.
+        scene_->addFootprintFill(footprint_, glm::vec4(0.30f, 0.92f, 0.95f, 0.20f));
+        scene_->addFootprint(footprint_, *terrain_);
+    }
 
-    if (hover_valid_) scene_->addPickRay(hover_result_, *terrain_, 2500.0);
+    if (hover_valid_) scene_->addPickRay(hover_result_, *terrain_, 2500.0, 25.0 * glyph);
     if (have_pick_) {
-        scene_->addPickRay(pick_result_, *terrain_, 2500.0);
+        scene_->addPickRay(pick_result_, *terrain_, 2500.0, 25.0 * glyph);
         if (show_flat_comparison_ && pick_result_.valid && pick_flat_result_.valid) {
             // The flat-earth answer, and a line joining it to the real one.
             // The length of that line is the error a terrain-unaware system
             // would have made, drawn at the scale it actually happens.
             scene_->addGroundMarker(pick_flat_result_.ground_enu,
-                                    glm::vec4(0.95f, 0.35f, 0.45f, 1.0f), 18.0);
+                                    glm::vec4(0.95f, 0.35f, 0.45f, 1.0f), 18.0 * glyph);
             lines.addSegment(toFloat(pick_result_.ground_enu),
                              toFloat(pick_flat_result_.ground_enu),
                              glm::vec4(0.95f, 0.35f, 0.45f, 0.9f));
@@ -1058,7 +1082,7 @@ void App::renderWorldView() {
     if (flight_.gimbalMode() == FlightSimulator::GimbalMode::TrackPoint) {
         const glm::dvec2 t = flight_.trackTargetEnu();
         scene_->addGroundMarker(glm::dvec3(t.x, t.y, terrain_->sampleHeight(t.x, t.y)),
-                                colours::boresight, 14.0);
+                                colours::boresight, 14.0 * glyph);
     }
 
     scene_->endWorld();
@@ -1086,7 +1110,11 @@ void App::renderSimulatedCamera() {
         camera_.glProjectionMatrix(1.0, 60000.0) * cameraViewMatrix();
     const glm::vec3 eye = toFloat(cameraPositionEnu(uav_, frame_));
 
-    scene_->beginWorld(view_projection, eye, mapIsImagery());
+    // The inset is the camera's own image, so its pixel scale is the
+    // camera's, not the 3D view's.
+    const double per_pixel =
+        2.0 * std::tan(glm::radians(camera_.verticalFovDeg()) * 0.5) / rect.w;
+    scene_->beginWorld(view_projection, eye, ground_mode_, dark_ground_, per_pixel);
     scene_->drawGround();
 
     PrimitiveBatch& lines = scene_->world();
@@ -1555,6 +1583,7 @@ void App::renderHud() {
             "X                    FLAT-EARTH ERROR",
             "V                    CAMERA VIEW SIZE",
             "M                    MAP / SATELLITE / HEIGHT",
+            "N                    DARK GROUND",
             "TAB                  FOCUS CAMERA PANE",
             "R                    RESET",
             "F12                  SCREENSHOT",

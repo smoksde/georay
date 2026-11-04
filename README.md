@@ -234,6 +234,18 @@ there appear; the ones behind you are dropped.
 
 ![height map mode](docs/screenshot-height.png)
 
+The ground is **darkened by default** (`N` toggles it). That is a legibility
+decision rather than a taste one: the aircraft, its frustum and its imaged
+area are thin bright overlays, and against a paper-white map zoomed out they
+disappear. A drawn map is *inverted* rather than dimmed — paper white becomes
+near black and black ink becomes light grey — which keeps every feature's own
+contrast instead of crushing the whole sheet. Imagery and the height ramp are
+dimmed instead, since neither survives inversion.
+
+No keyless dark basemap exists to fetch instead; the obvious ones now want an
+API key. Doing the tone here turns out better anyway — it works on whatever is
+already cached, for any source, and costs nothing to switch.
+
 All three are flat, and that is deliberate. Draping a map over relief distorts
 it exactly where it is most worth reading, and a map you cannot read is not
 worth the parallax. **Relief has not been thrown away** — the terrain is still
@@ -247,6 +259,24 @@ unaffected.
 Flattening is also what makes the chunking tractable: a chunk is two triangles
 and one texture rather than a patch of heightfield with its own seams, normals
 and level of detail.
+
+Everything that touches the ground — the imaged area, its outline, the markers,
+the aircraft's plumb line — is drawn **on the plane**, not at the elevation it
+was computed at. It has to be: the plane sits at the frame origin's own height,
+so anything placed at its true terrain height vanishes wherever the ground dips
+below that, which is most of a city. The elevations are still reported as
+numbers; what would be worse is a shape that is only half there.
+
+### Overlays you can actually see
+
+The imaged area is a filled translucent surface under a thick outline, and the
+rays, frustum edges and boresight are drawn as camera-facing ribbons of
+constant screen width. `glLineWidth` above 1 is not required to do anything in
+a core profile and on most drivers does not, so a line that has to stay
+visible from ten kilometres has to be geometry rather than a line. The
+aircraft and the ground markers scale with viewing distance for the same
+reason — the thing you are meant to be looking at should not be the hardest
+thing to see.
 
 ### Tiles arrive while you fly
 
@@ -419,7 +449,8 @@ continental distances.
 | `1` `2` `3` `4` | Synthetic terrain: flat, hills, valley, mountains |
 | `0` | Back to the real DEM terrain, if loaded |
 | `[` `]`, `,` `.`, `-` `=`, `;` `'` | Camera zoom, height AGL, ground speed, orbit radius |
-| `M`, `TAB`, `V` | Ground mode (map / satellite / height), focus camera pane, enlarge it |
+| `M`, `N` | Ground mode (map / satellite / height), dark ground |
+| `TAB`, `V` | Focus camera pane, enlarge it |
 | `D`, `F`, `X` | Lens distortion, footprint, flat-earth error |
 | `R`, `F12`, `H`, `Q` | Reset, screenshot, help, quit |
 

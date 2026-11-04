@@ -135,6 +135,9 @@ private:
     // Whether the synthetic landmark towers belong in the scene at all.
     bool showStructures() const;
     bool mapIsImagery() const { return ground_mode_ == GroundMode::Satellite; }
+    // Overlay geometry scales with viewing distance so the aircraft and its
+    // markers keep a usable size on screen rather than shrinking to a pixel.
+    double overlayScale() const;
     void resetSimulation();
     // Builds the ENU frame and the terrain, from real elevation data when a
     // DEM directory was given and from the synthetic generator otherwise.
@@ -296,6 +299,9 @@ private:
     bool show_footprint_ = true;
     bool show_flat_comparison_ = true;
     bool large_inset_ = false;
+    // Darkens the ground so the bright overlays stay readable. On by
+    // default: against a paper-white map zoomed out, they vanish.
+    bool dark_ground_ = true;
     // Which map layer is draped, or -1 for bare terrain. M cycles through
     // whichever layers actually loaded.
     GroundMode ground_mode_ = GroundMode::Satellite;

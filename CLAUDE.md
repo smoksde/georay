@@ -116,7 +116,17 @@ Relief still exists - `Terrain` is what rays are intersected against and what
 the height-map mode colours - it has just stopped being geometry, because
 draping a map over relief distorts it where it most needs reading.
 
-Three consequences to keep in mind. Chunk quads wind the opposite way to the
+Ground overlays go on the plane, not at the height they were computed at -
+`onPlane()` in scene.cpp. The plane sits at the frame origin's elevation, so
+anything drawn at its true terrain height is depth-culled wherever the ground
+dips below that. The footprint fill rendered as four stray wedges before this.
+
+Lines that have to read from a distance are ribbons, not GL_LINES:
+`Scene::addThickSegment` builds a camera-facing quad of constant screen width.
+Width and facing are computed per endpoint - one width from the midpoint makes
+a segment that spans depth come out wedge-shaped.
+
+Three more consequences to keep in mind. Chunk quads wind the opposite way to the
 obvious one (texture v runs south, ENU y runs north), so a grid wound in
 texture order is culled away entirely. New chunks and retries of incomplete
 ones need separate budgets, or a view full of half-covered chunks spends every
