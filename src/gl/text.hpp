@@ -3,21 +3,17 @@
 // Screen-space text, from a bitmap atlas baked out of a TrueType font by
 // scripts/bake_font.py.
 //
-// Baked rather than rasterised at run time, for the same reason the map
-// tiles are stitched in Python: it keeps FreeType, stb_truetype and every
-// other font library out of the build. It also makes the text sharper. The
-// atlas is rendered at exactly the pixel sizes the HUD draws at and sampled
-// 1:1, so glyphs land on whole pixels rather than being resampled - the
-// difference between crisp text and grey mush at 13 px.
+// Baked rather than rasterised at run time: keeps FreeType/stb_truetype out
+// of the build, and the atlas is rendered at exactly the HUD's pixel sizes
+// and sampled 1:1, so glyphs land on whole pixels - crisp text instead of
+// grey mush at 13 px.
 //
-// Three faces are baked, because a HUD needs a readout size, a footnote size
-// and a heading size, and anything in between would just be a blurry version
-// of one of them.
+// Three faces: a readout size, a footnote size, a heading size - anything
+// between would just be a blurry version of one of them.
 //
-// A 3x5 font is still compiled in as a fallback. It is not vestigial: if the
-// atlas file is missing or unreadable, a HUD of tiny capitals is far better
-// than a window with no text at all, and the failure then announces itself
-// instead of looking like a rendering bug.
+// A 3x5 font is compiled in as a fallback, not vestigial: if the atlas is
+// missing or unreadable, tiny capitals beat no text at all, and the failure
+// announces itself instead of looking like a rendering bug.
 
 #include <string>
 #include <vector>
@@ -46,9 +42,8 @@ public:
     // pixels with y downwards. Newlines start a new line at the same x.
     void add(const std::string& text, glm::vec2 position, int face, const glm::vec4& colour);
 
-    // Metrics. Members rather than statics now: they come from the loaded
-    // atlas, and a caller that computed them from a formula would disagree
-    // with what actually gets drawn.
+    // Metrics, from the loaded atlas rather than a formula a caller might
+    // compute differently from what actually gets drawn.
     float advance(int face) const;
     float lineHeight(int face) const;
     float ascent(int face) const;
@@ -63,14 +58,13 @@ private:
         int pixel_size = 0;
         int cell_w = 0, cell_h = 0;
         int advance = 0, ascent = 0;
-        // Stored rather than derived from the cell: a baked face pads its
-        // cell by a pixel each side, while the fallback's cell already
-        // includes its leading, so one formula cannot serve both. Deriving
-        // it collapsed the fallback's lines onto each other.
+        // Stored, not derived from the cell: a baked face pads its cell by a
+        // pixel each side, the fallback's cell already includes its
+        // leading, and deriving it collapsed the fallback's lines together.
         int line_height = 0;
         int columns = 16;
-        // Where this face's grid sits in the shared texture. All faces live
-        // in one texture so drawing mixed sizes still takes a single bind.
+        // Where this face's grid sits in the shared texture, so mixed sizes
+        // still draw with a single bind.
         int atlas_x = 0, atlas_y = 0;
         int atlas_w = 0, atlas_h = 0;
         // Integer upscale, used only by the built-in fallback font.

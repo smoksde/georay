@@ -1,12 +1,11 @@
 #pragma once
 
-// The free-flying camera for the 3D inspection view - the window you look at
-// the simulation through, as opposed to the UAV camera being simulated.
+// The free-flying camera for the 3D inspection view, as opposed to the UAV
+// camera being simulated.
 //
-// Orbit rather than first-person: the subject is a point on the ground and a
-// ray reaching it, and an orbit camera keeps that subject centred while you
-// walk around it to check from another angle whether the ray really does pass
-// through the hit point. A WASD camera makes that a chore.
+// Orbit rather than first-person: the subject is a point and a ray reaching
+// it, and orbiting keeps that subject centred while checking the ray from
+// another angle - a WASD camera makes that a chore.
 
 #include <algorithm>
 #include <cmath>
@@ -22,10 +21,8 @@ public:
 
     void orbit(float yaw_delta_deg, float pitch_delta_deg) {
         yaw_deg_ += yaw_delta_deg;
-        // Stop just short of straight down and of the horizon: at exactly 90
-        // degrees the up vector and the view direction are parallel and
-        // glm::lookAt returns a matrix full of NaNs, which blanks the window
-        // with no other symptom.
+        // Short of straight down/the horizon: at exactly 90 degrees up and
+        // view direction are parallel and glm::lookAt returns NaNs.
         pitch_deg_ = std::clamp(pitch_deg_ + pitch_delta_deg, -89.0f, -2.0f);
     }
 
@@ -63,10 +60,9 @@ public:
     glm::mat4 view() const { return glm::lookAt(position(), target_, glm::vec3(0, 0, 1)); }
 
     glm::mat4 projection() const {
-        // The near plane scales with distance: a fixed 0.1 m near plane with
-        // a 60 km far plane throws away most of the depth buffer's precision,
-        // and the terrain starts z-fighting with the overlay lines drawn on
-        // top of it.
+        // Scales with distance: a fixed 0.1 m near plane against a 60 km far
+        // one wastes most of the depth buffer's precision and z-fights with
+        // the overlay lines.
         const float near_plane = std::max(0.5f, distance_ * 0.002f);
         return glm::perspective(glm::radians(55.0f), aspect_, near_plane, 60000.0f);
     }

@@ -7,12 +7,9 @@
 
 namespace georay {
 
-// A linked GLSL program, loaded from files on disk.
-//
-// Uniform locations are looked up lazily and cached, because the alternative
-// - a glGetUniformLocation per uniform per frame - is a measurable cost for
-// no benefit, and naming uniforms at the call site keeps the drawing code
-// readable.
+// A linked GLSL program, loaded from files on disk. Uniform locations are
+// looked up lazily and cached - a glGetUniformLocation per uniform per frame
+// is a measurable cost for no benefit.
 class Shader {
 public:
     Shader(const std::string& vertex_path, const std::string& fragment_path);
@@ -23,10 +20,9 @@ public:
 
     void bind() const { glUseProgram(program_); }
 
-    // Whether the program compiled and linked. A failed program still exists
-    // as an object and still binds without error - it just draws nothing, or
-    // garbage. So this has to be checked explicitly rather than assumed, or
-    // a shader typo shows up as a blank window with no message.
+    // Whether the program compiled and linked - a failed one still exists
+    // and binds without error, drawing nothing or garbage, so this must be
+    // checked explicitly or a shader typo shows up as a blank window.
     bool ok() const { return ok_; }
     const std::string& error() const { return error_; }
 

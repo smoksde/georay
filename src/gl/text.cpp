@@ -12,10 +12,9 @@ namespace {
 
 // --- the built-in fallback font ------------------------------------------
 //
-// Only reached when the baked atlas cannot be loaded. Three pixels wide, so
-// it is barely legible, but a HUD of tiny capitals beats a window with no
-// text - and the startup message says which font is in use, so the fallback
-// never looks like a rendering bug.
+// Reached only when the baked atlas fails to load. Three pixels wide and
+// barely legible, but better than no text; the startup message says which
+// font is in use, so this never reads as a rendering bug.
 constexpr int kGlyphW = 3, kGlyphH = 5;
 constexpr int kFallbackCellW = 4, kFallbackCellH = 7;
 constexpr int kFallbackCols = 16, kFallbackRows = 4;

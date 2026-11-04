@@ -4,13 +4,12 @@
 //
 //   SurfaceMesh    - an indexed triangle mesh uploaded once (the terrain).
 //   PrimitiveBatch - vertex-coloured lines or triangles rebuilt every frame
-//                    (the frustum, rays, footprint, grid, markers, the
-//                    aircraft, and the HUD's panel backgrounds).
+//                    (frustum, rays, footprint, grid, markers, aircraft,
+//                    HUD panel backgrounds).
 //
-// Everything in the 3D view that is not the terrain is lines. That is a
-// deliberate choice for a geometry debugging tool: a line either passes
-// through the point it should or it visibly does not, whereas shaded solids
-// hide a metre of error behind a highlight.
+// Everything in the 3D view but the terrain is lines, deliberately: a line
+// either passes through the point it should or visibly does not, where a
+// shaded solid can hide a metre of error behind a highlight.
 
 #include <vector>
 
@@ -21,18 +20,13 @@ namespace georay {
 struct SurfaceVertex {
     glm::vec3 position;
     glm::vec3 normal;
-    // Map texture coordinates, computed per post from the post's own
-    // latitude and longitude through the full Web Mercator transform.
-    //
-    // One set, not one per layer: the map textures now cover a geographic
-    // box rather than whatever tiles they were made of, so every layer - and
-    // every zoom level - shares the same coordinates. That is what lets the
-    // map be re-stitched at a finer zoom without touching the mesh.
-    //
-    // Per-vertex rather than derived in the shader from the world position,
-    // because the map is in Mercator and the world is in a local tangent
-    // plane; the relation is not linear, and approximating it per fragment
-    // slides the map off the ground by a metre or so across the scene.
+    // Map texture coordinates, computed per post through Web Mercator. One
+    // set, not one per layer: since textures cover a geographic box rather
+    // than specific tiles, every layer and zoom shares the same coordinates
+    // - what lets the map re-stitch at a finer zoom without touching the
+    // mesh. Per-vertex rather than derived in the shader, since the
+    // Mercator/tangent-plane relation is not linear and approximating it per
+    // fragment slides the map off the ground by a metre or so.
     glm::vec2 map_uv{0.0f, 0.0f};
 };
 
@@ -74,9 +68,9 @@ public:
     void addCircleXY(const glm::vec3& centre, float radius, const glm::vec4& colour,
                      int segments = 48);
 
-    // Triangle-mode helpers. A filled quad is what a HUD panel background
-    // is, and screen-space rectangles are the only filled geometry this tool
-    // needs beyond the terrain itself.
+    // Triangle-mode helpers - a filled quad is a HUD panel background, and
+    // screen-space rectangles are the only filled geometry needed beyond
+    // the terrain itself.
     void addTriangle(const glm::vec3& a, const glm::vec3& b, const glm::vec3& c,
                      const glm::vec4& colour);
     void addTriangle(const glm::vec3& a, const glm::vec3& b, const glm::vec3& c,
