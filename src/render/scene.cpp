@@ -12,7 +12,7 @@ glm::vec3 toFloat(const glm::dvec3& v) { return glm::vec3(float(v.x), float(v.y)
 
 Scene::Scene() = default;
 
-Scene::~Scene() { clearMapRasters(); }
+Scene::~Scene() { clearMapTextures(); }
 
 bool Scene::initialise() {
     terrain_shader_ = std::make_unique<Shader>(shaderPath("terrain.vert"),
@@ -31,45 +31,40 @@ bool Scene::initialise() {
     return true;
 }
 
-bool Scene::setMapRaster(int layer, const MapRaster& map) {
-    if (layer < 0 || layer >= kMapLayers || !map.valid()) return false;
+bool Scene::setMapTexture(int layer, const unsigned char* rgb, int width, int height) {
+    if (layer < 0 || layer >= kMapLayers || !rgb || width < 1 || height < 1) return false;
 
-    // A raster larger than the driver's limit does not fail loudly - the
+    // A texture larger than the driver's limit does not fail loudly - the
     // upload is simply dropped and the terrain renders untextured, which
-    // looks like the map file was never found. Check first and say so.
+    // looks like the map was never found. Check first and say so.
     GLint max_size = 0;
     glGetIntegerv(GL_MAX_TEXTURE_SIZE, &max_size);
-    if (map.width() > max_size || map.height() > max_size) {
-        error_ = "map raster is " + std::to_string(map.width()) + "x" +
-                 std::to_string(map.height()) + " but this GPU allows at most " +
-                 std::to_string(max_size) +
-                 "; re-fetch with a smaller --max-pixels";
+    if (width > max_size || height > max_size) {
+        error_ = "map texture is " + std::to_string(width) + "x" + std::to_string(height) +
+                 " but this GPU allows at most " + std::to_string(max_size);
         return false;
     }
 
     if (map_textures_[layer] == 0) glGenTextures(1, &map_textures_[layer]);
-
     glBindTexture(GL_TEXTURE_2D, map_textures_[layer]);
     glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB8, map.width(), map.height(), 0, GL_RGB,
-                 GL_UNSIGNED_BYTE, map.pixels().data());
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB8, width, height, 0, GL_RGB, GL_UNSIGNED_BYTE, rgb);
 
-    // A raster this size can genuinely exhaust memory on a modest GPU, and
-    // the symptom is again a silently untextured terrain.
     if (glGetError() == GL_OUT_OF_MEMORY) {
         glDeleteTextures(1, &map_textures_[layer]);
         map_textures_[layer] = 0;
-        error_ = "the GPU could not hold a " + std::to_string(map.width()) + "x" +
-                 std::to_string(map.height()) + " map texture";
+        error_ = "the GPU could not hold a " + std::to_string(width) + "x" +
+                 std::to_string(height) + " map texture";
         return false;
     }
-    // Mipmaps matter here, not as polish: the raster is thousands of pixels
-    // across and the 3D view shows the whole thing at once, so without them
-    // the minified map is a shimmering mess of aliased street lines.
+
+    // Mipmaps matter here, not as polish: the texture is thousands of pixels
+    // across and the 3D view shows all of it at once, so without them the
+    // minified map is a shimmering mess of aliased lines.
     glGenerateMipmap(GL_TEXTURE_2D);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-    // Clamp rather than repeat: a tiled map would put a second Berlin next to
+    // Clamp rather than repeat: a tiled map would put a second city next to
     // the first, which is worse than an honest edge.
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
@@ -95,7 +90,7 @@ void Scene::clearMapLayer(int layer) {
     }
 }
 
-void Scene::clearMapRasters() {
+void Scene::clearMapTextures() {
     for (int layer = 0; layer < kMapLayers; ++layer) {
         if (map_textures_[layer] != 0) {
             glDeleteTextures(1, &map_textures_[layer]);
@@ -105,7 +100,7 @@ void Scene::clearMapRasters() {
 }
 
 void Scene::buildTerrain(const Terrain& terrain, const EnuFrame& frame,
-                         const MapRaster* const maps[kMapLayers]) {
+                         const MercatorBox& box) {
     const int n = terrain.resolution();
 
     std::vector<SurfaceVertex> vertices;
@@ -122,20 +117,14 @@ void Scene::buildTerrain(const Terrain& terrain, const EnuFrame& frame,
             const glm::dvec3 nrm = terrain.sampleNormal(p.x, p.y);
 
             SurfaceVertex vertex{glm::vec3(float(p.x), float(p.y), float(h)), toFloat(nrm), {}};
-            if (maps && (maps[0] || maps[1])) {
+            if (box.valid()) {
                 // The post's own position on the ellipsoid, through the full
                 // Web Mercator transform. Doing it here, once per post, is
-                // what keeps each map registered to the ground to within a
-                // pixel across the whole scene - and the two layers need
-                // their own coordinates because they are separate rasters
-                // that need not share a zoom or a tile range.
+                // what keeps the map registered to the ground to within a
+                // pixel across the whole scene.
                 const Geodetic here = frame.toGeodetic(glm::dvec3(p.x, p.y, h));
-                for (int layer = 0; layer < kMapLayers; ++layer) {
-                    if (!maps[layer] || !maps[layer]->valid()) continue;
-                    const glm::dvec2 uv =
-                        maps[layer]->uvFor(here.latitude_deg, here.longitude_deg);
-                    vertex.map_uv[layer] = glm::vec2(float(uv.x), float(uv.y));
-                }
+                const glm::dvec2 uv = box.uvFor(here.latitude_deg, here.longitude_deg);
+                vertex.map_uv = glm::vec2(float(uv.x), float(uv.y));
             }
             vertices.push_back(vertex);
         }
@@ -175,7 +164,6 @@ void Scene::beginWorld(const glm::mat4& view_projection, const glm::vec3& eye,
 
     const bool mapped = hasMap(map_layer);
     terrain_shader_->set("u_has_map", mapped ? 1 : 0);
-    terrain_shader_->set("u_map_layer", mapped ? map_layer : 0);
     terrain_shader_->set("u_map_is_imagery", imagery ? 1 : 0);
     if (mapped) {
         glActiveTexture(GL_TEXTURE0);

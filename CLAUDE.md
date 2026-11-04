@@ -23,16 +23,21 @@ re-derive it from the code.
 
 ## Network
 
-georay never makes a network request. `scripts/fetch_dem.py` is the only thing
-in the repo that does, and the user runs it deliberately. Keep it that way: it
-is what lets `--selftest` run offline, keeps the binary free of libcurl and
-TLS, and keeps bulk downloading an explicit act rather than something a render
-loop does on someone's behalf.
+georay fetches map tiles only with `--online`, and only from the app layer.
+`src/geo/` must stay network-free so `--selftest` remains a pure numeric suite
+that runs headless and offline - that is the property to protect, not
+offlineness as such.
 
-Messy third-party formats (PNG map tiles, geoid PGMs, and GeoTIFF if it is
-ever added) are parsed in Python at fetch time and written out as simple
-arrays. The C++ side reads a handful of trivially parseable formats and never
-learns about the others - which is also why georay needs no image decoder.
+The fetcher runs on its own thread, shells out to `curl` (no libcurl link),
+rate-limits, caps itself per session, and shares the cache directory and
+naming with `scripts/fetch_dem.py` and `scripts/fetch_map.py` so neither
+re-downloads what the other has.
+
+Geoid PGMs - and GeoTIFF if it is ever added - are still converted in Python
+at fetch time into simple arrays. PNG and JPEG map tiles are the exception:
+they are decoded in C++ via vendored stb_image, because the map is stitched at
+run time at a zoom chosen from the view, and that cannot be done ahead of time
+in Python.
 
 Tile servers have usage policies. fetch_map.py identifies itself, rate-limits,
 caches per tile and refuses bulk runs; keep it that way, and keep the
@@ -106,21 +111,16 @@ it was written.
 
 ## Streaming
 
-Three caches, all bounded, all for the same reason - the aircraft travels and
-does not come back:
+Both caches are bounded, for the same reason - the aircraft travels and does
+not come back. `DemSource` holds at most `kDefaultTileLimit` one-degree tiles
+(26 MB each) and `TileCache` a few hundred decoded map tiles, both
+least-recently-used first out.
 
-- `DemSource` holds at most `kDefaultTileLimit` one-degree tiles (26 MB each),
-  least-recently-used first out.
-- `MapLibrary` holds exactly one window. More would need a texture array and
-  a redirect table in the shader; one window plus the re-anchor that rebuilds
-  the terrain mesh anyway is the same machinery for a fraction of the cost.
-- `MapLibrary::open` reads headers only. A region-sized library is dozens of
-  windows of tens of megabytes; reading them in full to learn four numbers
-  each would be a gigabyte of disk traffic before the first frame.
-
-The map window must change in lockstep with the terrain mesh rebuild, because
-the mesh carries baked texture coordinates. Swapping one without the other
-misregisters the map.
+The map texture covers a `MercatorBox`, and its UVs are a function of that box
+alone. That is deliberate and load-bearing: it means the texture can be
+re-stitched at any zoom without rebuilding the terrain mesh, which is what
+makes zoom-matched detail possible at all. Change what the box *is* - a
+re-anchor - and the mesh must be rebuilt with it, in that order.
 
 ## Process
 

@@ -21,18 +21,19 @@ namespace georay {
 struct SurfaceVertex {
     glm::vec3 position;
     glm::vec3 normal;
-    // Map raster coordinates for each layer, computed per post from the
-    // post's own latitude and longitude. Per-vertex rather than derived in
-    // the shader from the world position, because the map is in Web Mercator
-    // and the world is in a local tangent plane - the relation between them
-    // is not linear, and approximating it in the fragment shader would slide
-    // the map off the ground by a metre or so across the scene.
+    // Map texture coordinates, computed per post from the post's own
+    // latitude and longitude through the full Web Mercator transform.
     //
-    // One set per layer, because the satellite and street rasters are
-    // separate files that need not share a zoom or a tile range. Eight extra
-    // bytes a post is cheaper than rebuilding a 263k-post mesh every time
-    // somebody presses M.
-    glm::vec2 map_uv[2]{{0.0f, 0.0f}, {0.0f, 0.0f}};
+    // One set, not one per layer: the map textures now cover a geographic
+    // box rather than whatever tiles they were made of, so every layer - and
+    // every zoom level - shares the same coordinates. That is what lets the
+    // map be re-stitched at a finer zoom without touching the mesh.
+    //
+    // Per-vertex rather than derived in the shader from the world position,
+    // because the map is in Mercator and the world is in a local tangent
+    // plane; the relation is not linear, and approximating it per fragment
+    // slides the map off the ground by a metre or so across the scene.
+    glm::vec2 map_uv{0.0f, 0.0f};
 };
 
 class SurfaceMesh {

@@ -25,7 +25,7 @@ origin            52.5163,13.3777
 extent            20000
 
 dem               data/dem
-map-street-dir    data/berlin_brandenburg
+map-street        basemapde
 map-mode          street
 
 # EGM96 over Brandenburg runs about 39-42 m, so one constant is good to a

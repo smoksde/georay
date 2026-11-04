@@ -16,7 +16,7 @@
 
 #include "geo/camera_model.hpp"
 #include "geo/geolocate.hpp"
-#include "geo/maptile.hpp"
+#include "geo/mercator.hpp"
 #include "geo/pose.hpp"
 #include "geo/terrain.hpp"
 #include "gl/mesh.hpp"
@@ -75,8 +75,10 @@ public:
     // `frame` and `map` are needed together: the map's texture coordinates
     // are computed per post from that post's own latitude and longitude,
     // which only the frame can supply. Pass a null map for untextured terrain.
-    void buildTerrain(const Terrain& terrain, const EnuFrame& frame,
-                      const MapRaster* const maps[kMapLayers]);
+    // `box` fixes the geographic extent the map layers cover. Texture
+    // coordinates come from it alone, so a layer can be re-stitched at any
+    // zoom afterwards without the mesh being rebuilt.
+    void buildTerrain(const Terrain& terrain, const EnuFrame& frame, const MercatorBox& box);
 
     // Up to two map layers - in practice satellite imagery and a street map
     // of the same ground, switchable at runtime. Call before buildTerrain,
@@ -85,8 +87,10 @@ public:
     // Returns false and sets error() when the raster cannot be uploaded: too
     // large for the driver, or out of memory. Both otherwise present as
     // untextured terrain, indistinguishable from a missing file.
-    bool setMapRaster(int layer, const MapRaster& map);
-    void clearMapRasters();
+    // Uploads RGB pixels as a layer's texture. The caller owns the stitching;
+    // this only moves bytes to the GPU.
+    bool setMapTexture(int layer, const unsigned char* rgb, int width, int height);
+    void clearMapTextures();
     void clearMapLayer(int layer);
     bool hasMap(int layer) const {
         return layer >= 0 && layer < kMapLayers && map_textures_[layer] != 0;

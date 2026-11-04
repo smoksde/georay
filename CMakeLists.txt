@@ -29,6 +29,9 @@ endif()
 include(FetchContent)
 
 find_package(OpenGL REQUIRED)
+# The live tile fetcher runs on its own thread so the render loop never waits
+# on a socket.
+find_package(Threads REQUIRED)
 
 find_package(SDL2 QUIET)
 if(NOT SDL2_FOUND)
@@ -91,8 +94,7 @@ add_library(georay_geo STATIC
     src/geo/dem.cpp
     src/geo/geoid.cpp
     src/geo/json.cpp
-    src/geo/maplibrary.cpp
-    src/geo/maptile.cpp
+    src/geo/mercator.cpp
     src/geo/mission.cpp
     src/geo/pose.cpp
     src/geo/terrain.cpp
@@ -103,6 +105,10 @@ target_link_libraries(georay_geo PUBLIC georay_glm)
 
 add_executable(georay
     src/main.cpp
+    src/map/tilesource.cpp
+    src/map/tilecache.cpp
+    src/map/tilefetcher.cpp
+    src/map/maptexture.cpp
     src/app.cpp
     src/flight.cpp
     src/selftest.cpp
@@ -117,10 +123,14 @@ target_link_libraries(georay
         ${GEORAY_SDL2_TARGET}
         ${GEORAY_GLEW_TARGET}
         OpenGL::GL
+        Threads::Threads
 )
 
 # Shaders are read at runtime relative to this, so a build directory anywhere
 # still finds them.
+# stb_image, vendored. See third_party/README.md for why it is needed.
+target_include_directories(georay PRIVATE third_party)
+
 target_compile_definitions(georay PRIVATE
     GEORAY_SHADER_DIR="${CMAKE_CURRENT_SOURCE_DIR}/shaders"
     GEORAY_SCENE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/scenes"

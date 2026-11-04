@@ -20,7 +20,7 @@
 #include "geo/dem.hpp"
 #include "geo/geoid.hpp"
 #include "geo/json.hpp"
-#include "geo/maptile.hpp"
+#include "geo/mercator.hpp"
 #include "geo/mission.hpp"
 #include "geo/geolocate.hpp"
 
@@ -1151,178 +1151,121 @@ void testFloatingOrigin() {
     }
 }
 
-// Writes a georay map raster with a known pixel pattern.
-std::string writeTestMap(const std::string& directory, int zoom, int tile_x, int tile_y,
-                         int tiles_x, int tiles_y, const std::string& attribution,
-                         int pixels_per_tile = 4) {
-    const std::string path = directory + "/test.map";
-    const int width = tiles_x * pixels_per_tile, height = tiles_y * pixels_per_tile;
-    std::ofstream file(path, std::ios::binary);
-    file.write("GEORAYM1", 8);
-    const int32_t header[7] = {zoom, tile_x, tile_y, tiles_x, tiles_y, width, height};
-    file.write(reinterpret_cast<const char*>(header), sizeof(header));
-    std::vector<char> attribution_field(128, '\0');
-    std::memcpy(attribution_field.data(), attribution.c_str(),
-                std::min(attribution.size(), size_t(127)));
-    file.write(attribution_field.data(), 128);
-    for (int i = 0; i < width * height; ++i) {
-        const unsigned char rgb[3] = {(unsigned char)(i & 0xFF), 0x40, 0x80};
-        file.write(reinterpret_cast<const char*>(rgb), 3);
-    }
-    return path;
-}
+// The projection the whole map pipeline now rests on.
+//
+// Texture coordinates come from a geographic box rather than from whichever
+// tiles a map was stitched out of. That is what lets the map be re-stitched
+// at a finer zoom without rebuilding the terrain mesh - and it only holds if
+// a box's UVs really are independent of the zoom it is filled at.
+void testMercator() {
+    std::printf("web mercator and the map box\n");
 
-void testMapRaster() {
-    std::printf("map raster and web mercator\n");
-
-    const std::string directory = makeTempDir();
-    check(!directory.empty(), "temporary directory for the map tests");
-    if (directory.empty()) return;
-
-    // A whole-world raster at zoom 1, so the projection's own identities can
-    // be checked rather than some arbitrary crop of it.
-    {
-        const std::string path = writeTestMap(directory, 1, 0, 0, 2, 2, "(C) TEST");
-        MapRaster map;
-        std::string error;
-        check(MapRaster::load(path, map, error), "load a map raster: " + error);
-        check(map.valid(), "a loaded raster is valid");
-        check(map.zoom() == 1, "zoom survives the round trip");
-        check(map.width() == 8 && map.height() == 8, "dimensions survive the round trip");
-        check(map.attribution() == "(C) TEST",
-              "the attribution travels inside the raster, not beside it");
-
-        // Longitude is linear in Web Mercator, and these are exact.
-        checkNear(map.uvFor(0.0, -180.0).x, 0.0, 1e-12, "longitude -180 is the western edge");
-        checkNear(map.uvFor(0.0, 0.0).x, 0.5, 1e-12, "the prime meridian is halfway across");
-        checkNear(map.uvFor(0.0, 180.0).x, 1.0, 1e-12, "longitude 180 is the eastern edge");
-        // Latitude is not, but the equator is still the midpoint by symmetry.
-        checkNear(map.uvFor(0.0, 0.0).y, 0.5, 1e-12, "the equator is halfway down");
-
-        // y(lat) + y(-lat) must equal the full height: the projection is
-        // symmetric about the equator even though it is not linear.
-        for (double lat : {10.0, 33.3, 52.5, 70.0, 84.0}) {
-            checkNear(map.uvFor(lat, 0.0).y + map.uvFor(-lat, 0.0).y, 1.0, 1e-12,
+    // Identities of the projection itself.
+    for (int zoom : {0, 1, 12, 18}) {
+        const double n = std::pow(2.0, double(zoom));
+        checkNear(mercatorTile(0.0, -180.0, zoom).x, 0.0, 1e-9, "longitude -180 is tile 0");
+        checkNear(mercatorTile(0.0, 0.0, zoom).x, n * 0.5, 1e-9, "the prime meridian is halfway");
+        checkNear(mercatorTile(0.0, 180.0, zoom).x, n, 1e-9, "longitude 180 is the last tile");
+        checkNear(mercatorTile(0.0, 0.0, zoom).y, n * 0.5, 1e-9, "the equator is halfway down");
+        // Symmetric about the equator even though it is not linear in latitude.
+        for (double lat : {10.0, 52.5, 84.0}) {
+            checkNear(mercatorTile(lat, 0.0, zoom).y + mercatorTile(-lat, 0.0, zoom).y, n, 1e-9,
                       "mercator is symmetric about the equator");
         }
-        // Northern latitudes are in the upper half, which pins the sign.
-        check(map.uvFor(52.5, 0.0).y < 0.5, "northern latitudes are above the midpoint");
-        check(map.uvFor(-52.5, 0.0).y > 0.5, "southern latitudes are below it");
-
-        // THE point of doing Mercator properly: v is not linear in latitude.
-        // At 45 degrees the linear answer would be 0.25, and Mercator gives
-        // about 0.18 - a difference of a fifteenth of the whole world.
-        const double linear_guess = 0.5 - 45.0 / 180.0;
-        check(std::fabs(map.uvFor(45.0, 0.0).y - linear_guess) > 0.05,
-              "latitude is NOT linear in v - interpolating it would be wrong");
-
-        check(map.covers(0.0, 0.0), "the world raster covers the origin");
-        check(!map.covers(0.0, 200.0), "an impossible longitude is not covered");
+        check(mercatorTile(52.5, 0.0, zoom).y < n * 0.5, "northern latitudes are above halfway");
     }
 
-    // A crop at a realistic zoom, matching what fetch_map.py produces for the
-    // Berlin scene. Its own edges must map to exactly 0 and 1, which is the
-    // check that the tile offsets are applied the right way round.
-    {
-        const int zoom = 16, tile_x = 35197, tile_y = 21488, tiles_x = 12, tiles_y = 12;
-        const std::string path =
-            writeTestMap(directory, zoom, tile_x, tile_y, tiles_x, tiles_y, "(C) TEST");
-        MapRaster map;
-        std::string error;
-        check(MapRaster::load(path, map, error), "load the cropped raster");
-
-        checkNear(map.uvFor(map.northEdge(), map.westEdge()).x, 0.0, 1e-9,
-                  "the west edge is u = 0");
-        checkNear(map.uvFor(map.northEdge(), map.westEdge()).y, 0.0, 1e-9,
-                  "the north edge is v = 0");
-        checkNear(map.uvFor(map.southEdge(), map.eastEdge()).x, 1.0, 1e-9,
-                  "the east edge is u = 1");
-        checkNear(map.uvFor(map.southEdge(), map.eastEdge()).y, 1.0, 1e-9,
-                  "the south edge is v = 1");
-        check(map.northEdge() > map.southEdge(), "north is north of south");
-        check(map.eastEdge() > map.westEdge(), "east is east of west");
-
-        // Berlin sits inside this crop, and near its middle.
-        check(map.covers(52.5163, 13.3777), "the Berlin crop covers the Brandenburg Gate");
-        const glm::dvec2 uv = map.uvFor(52.5163, 13.3777);
-        check(uv.x > 0.3 && uv.x < 0.7 && uv.y > 0.3 && uv.y < 0.7,
-              "...and puts it near the middle, not at an edge");
-
-        checkNear(map.metresPerPixel(0.0), map.metresPerPixel(52.5163) /
-                                               std::cos(deg2rad(52.5163)),
-                  1e-6, "resolution scales with 1/cos(latitude)");
+    // Round trip through the inverse.
+    Rng rng;
+    double worst = 0.0;
+    for (int i = 0; i < 2000; ++i) {
+        const double lat = rng.range(-84.0, 84.0), lon = rng.range(-179.9, 179.9);
+        const glm::dvec2 t = mercatorTile(lat, lon, 14);
+        worst = std::max(worst, std::fabs(mercatorLatitude(t.y, 14) - lat));
+        worst = std::max(worst, std::fabs(mercatorLongitude(t.x, 14) - lon));
     }
+    checkNear(worst, 0.0, 1e-9, "mercator round trip (worst, degrees)");
 
-    // Reported ground resolution must come from the raster, not from its zoom
-    // level. fetch_map.py scales the stitched image down to fit a GPU, and a
-    // resolution computed from the zoom alone claims detail the file does not
-    // have - which is the one number that says whether flying lower can show
-    // you anything.
-    {
-        const int zoom = 18, tiles = 8;
-        MapRaster native, scaled;
-        std::string error;
-        // Native: 256 pixels per tile.
-        check(MapRaster::load(writeTestMap(directory, zoom, 1000, 2000, tiles, tiles,
-                                           "(C) TEST", 256),
-                              native, error),
-              "load a native-resolution raster");
-        // Same ground, half the pixels: each pixel must cover twice the ground.
-        check(MapRaster::load(writeTestMap(directory, zoom, 1000, 2000, tiles, tiles,
-                                           "(C) TEST", 128),
-                              scaled, error),
-              "load a downsampled raster");
+    // Ground resolution, and the two zoom choosers.
+    checkNear(mercatorMetresPerPixel(0.0, 0), 156543.03392, 1e-3, "resolution at the equator");
+    checkNear(mercatorMetresPerPixel(52.5163, 12), 23.26, 0.02, "resolution at z12 in Berlin");
+    checkNear(mercatorMetresPerPixel(52.5163, 18), mercatorMetresPerPixel(52.5163, 12) / 64.0,
+              1e-9, "each zoom halves the ground a pixel covers");
 
-        // Zoom 18 at Berlin's latitude is about 0.363 m per pixel natively.
-        checkNear(native.metresPerPixel(52.5163), 0.3634, 1e-3,
-                  "native ground resolution at zoom 18 in Berlin");
-        checkNear(scaled.metresPerPixel(52.5163), 2.0 * native.metresPerPixel(52.5163), 1e-9,
-                  "halving the raster doubles the metres each pixel covers");
-        // Both cover the same ground, which is what makes the comparison fair.
-        checkNear(scaled.uvFor(52.5163, 13.3777).x, native.uvFor(52.5163, 13.3777).x, 1e-12,
-                  "scaling the raster does not move its geographic bounds");
+    // zoomForResolution rounds towards finer, zoomNotFinerThan towards
+    // coarser. A single rounding would either blur the map or quadruple the
+    // tiles fetched for a picture that is then averaged back down.
+    for (int zoom : {11, 13, 17}) {
+        const double exact = mercatorMetresPerPixel(52.5, zoom);
+        checkNear(zoomForResolution(52.5, exact, 0, 22), zoom, 0, "exact resolution is its zoom");
+        checkNear(zoomNotFinerThan(52.5, exact, 0, 22), zoom, 0, "...from either direction");
+        // Between two zooms the two disagree by exactly one step.
+        const double between = exact * 0.7;
+        check(zoomForResolution(52.5, between, 0, 22) == zoom + 1,
+              "a finer want rounds up to the finer zoom");
+        check(zoomNotFinerThan(52.5, between, 0, 22) == zoom,
+              "...while the budget rounds down to the coarser one");
     }
+    check(zoomForResolution(52.5, 0.01, 0, 15) == 15, "the source's ceiling is respected");
+    check(zoomNotFinerThan(52.5, 1e9, 8, 22) == 8, "...and its floor");
 
-    // The header-only read has to agree with the full one. A library of
-    // region-sized windows uses it to decide which covers a position, so a
-    // disagreement here would put the aircraft over the wrong window while
-    // every individual file remained perfectly valid.
+    // The box: UVs from bounds alone.
     {
-        const std::string path = writeTestMap(directory, 12, 2100, 1345, 7, 7, "(C) TEST", 64);
-        MapRaster full;
-        MapRasterInfo header;
-        std::string error;
-        check(MapRaster::load(path, full, error), "load a window in full");
-        check(MapRaster::readHeader(path, header, error), "read the same window's header");
+        const MercatorBox box = MercatorBox::around(52.5163, 13.3777, 2000.0);
+        check(box.valid(), "a box around a position is valid");
+        checkNear(box.uvFor(box.north(), box.west()).x, 0.0, 1e-12, "north-west corner is u=0");
+        checkNear(box.uvFor(box.north(), box.west()).y, 0.0, 1e-12, "...and v=0");
+        checkNear(box.uvFor(box.south(), box.east()).x, 1.0, 1e-12, "south-east corner is u=1");
+        checkNear(box.uvFor(box.south(), box.east()).y, 1.0, 1e-12, "...and v=1");
+        check(box.contains(52.5163, 13.3777), "the box contains its own centre");
+        check(!box.contains(52.5163, 14.5), "...and not somewhere else");
+        check(box.north() > box.south() && box.east() > box.west(), "bounds are the right way up");
 
-        check(header.zoom == full.zoom(), "header zoom matches");
-        check(header.width == full.width() && header.height == full.height(),
-              "header dimensions match");
-        check(header.attribution == full.attribution(), "header attribution matches");
-        checkNear(header.northEdge(), full.northEdge(), 1e-12, "header north edge matches");
-        checkNear(header.southEdge(), full.southEdge(), 1e-12, "header south edge matches");
-        checkNear(header.westEdge(), full.westEdge(), 1e-12, "header west edge matches");
-        checkNear(header.eastEdge(), full.eastEdge(), 1e-12, "header east edge matches");
+        // v is not linear in latitude - the whole reason this is done in
+        // Mercator rather than by interpolating degrees.
+        const double mid_lat = 0.5 * (box.north() + box.south());
+        const double linear_guess = 0.5;
+        const double actual = box.uvFor(mid_lat, box.west()).y;
+        check(std::fabs(actual - linear_guess) > 1e-7,
+              "v is not linear in latitude, even across 4 km");
 
-        // And it must refuse exactly what the full read refuses.
-        MapRasterInfo rejected;
-        check(!MapRaster::readHeader(directory + "/does_not_exist.map", rejected, error),
-              "header read refuses a missing file");
-    }
-
-    // Corrupt input must be refused rather than read as a raster of garbage.
-    {
-        const std::string path = directory + "/bad.map";
-        {
-            std::ofstream bad(path, std::ios::binary);
-            bad << "NOTAMAP!";
+        // THE invariant: the same box, described at any internal zoom, gives
+        // the same UVs. If this failed, re-stitching at a finer zoom would
+        // slide the map out from under the terrain mesh.
+        const MercatorBox same = MercatorBox::fromBounds(box.south(), box.north(), box.west(),
+                                                         box.east(), 12);
+        double worst_uv = 0.0;
+        for (int i = 0; i < 500; ++i) {
+            const double lat = rng.range(box.south(), box.north());
+            const double lon = rng.range(box.west(), box.east());
+            worst_uv = std::max(worst_uv, glm::length(box.uvFor(lat, lon) - same.uvFor(lat, lon)));
         }
-        MapRaster map;
-        std::string error;
-        check(!MapRaster::load(path, map, error), "a file with the wrong magic is refused");
-        check(!error.empty(), "...and says why");
-        check(!MapRaster::load(directory + "/does_not_exist.map", map, error),
-              "a missing file is refused");
+        checkNear(worst_uv, 0.0, 1e-9, "a box's UVs do not depend on the zoom it is held in");
+    }
+
+    // Tile ranges: which tiles a box needs, and that the count stays bounded.
+    {
+        const MercatorBox box = MercatorBox::around(52.5163, 13.3777, 2000.0);
+        for (int zoom : {10, 14, 18}) {
+            int x0, y0, x1, y1;
+            box.tileRange(zoom, x0, y0, x1, y1);
+            check(x1 >= x0 && y1 >= y0, "a tile range is never inverted");
+            const int n = int(std::pow(2.0, double(zoom)));
+            check(x0 >= 0 && y0 >= 0 && x1 < n && y1 < n, "a tile range stays on the map");
+
+            // Every corner of the box must fall inside the range, or the
+            // stitched texture would have an uncovered edge.
+            const double corners[4][2] = {{box.north(), box.west()},
+                                          {box.north(), box.east()},
+                                          {box.south(), box.west()},
+                                          {box.south(), box.east()}};
+            for (const auto& corner : corners) {
+                const glm::dvec2 t = mercatorTile(corner[0], corner[1], zoom);
+                check(t.x >= double(x0) - 1e-9 && t.x <= double(x1 + 1) + 1e-9 &&
+                          t.y >= double(y0) - 1e-9 && t.y <= double(y1 + 1) + 1e-9,
+                      "the tile range covers every corner of the box");
+            }
+        }
     }
 }
 
@@ -1602,7 +1545,7 @@ int runSelfTest() {
     testHgtTile();
     testGeoid();
     testDemTerrain();
-    testMapRaster();
+    testMercator();
     testFloatingOrigin();
     testJson();
     testMission();

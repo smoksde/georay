@@ -16,8 +16,8 @@ origin            52.5163,13.3777
 extent            1200
 
 dem               data/dem
-map-satellite     data/berlin_sat.map
-map-street        data/berlin_map.map
+map-satellite     esri
+map-street        basemapde
 geoid-separation  39.5
 
 # 400 m rather than a typical survey altitude: the imagery is about 0.6 m per

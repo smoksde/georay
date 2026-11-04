@@ -103,13 +103,13 @@ bool App::Options::loadScene(const std::string& path, Options& options, std::str
         } else if (key == "dem") {
             options.dem_directory = value;
         } else if (key == "map" || key == "map-satellite") {
-            options.satellite_map_path = value;
+            options.satellite_source = value;
         } else if (key == "map-street") {
-            options.street_map_path = value;
-        } else if (key == "map-satellite-dir") {
-            options.satellite_map_dir = value;
-        } else if (key == "map-street-dir") {
-            options.street_map_dir = value;
+            options.street_source = value;
+        } else if (key == "tiles") {
+            options.tile_directory = value;
+        } else if (key == "online") {
+            options.online = (value == "1" || value == "true" || value == "yes");
         } else if (key == "mission") {
             options.mission_path = value;
         } else if (key == "map-mode") {
@@ -282,76 +282,56 @@ bool App::buildWorld() {
         }
     }
 
-    const std::string layer_paths[2] = {options_.satellite_map_path, options_.street_map_path};
-    const std::string layer_dirs[2] = {options_.satellite_map_dir, options_.street_map_dir};
-    const char* layer_names[2] = {"satellite", "street map"};
-
-    // A directory of windows takes precedence over a single file: it is the
-    // same imagery, cut up so the aircraft can fly out of one window and
-    // into the next.
-    for (int layer = 0; layer < 2; ++layer) {
-        if (layer_dirs[layer].empty()) continue;
-        std::string error;
-        if (map_libraries_[layer].open(layer_dirs[layer], error)) {
-            map_from_library_[layer] = true;
-            map_is_imagery_[layer] = (layer == 0);
-            std::cout << "georay: " << layer_names[layer] << " library "
-                      << layer_dirs[layer] << " - " << map_libraries_[layer].windowCount()
-                      << " windows\n";
-            // A window smaller than the terrain leaves the edges of the
-            // scene on bare elevation tint. That is handled correctly, but
-            // it looks like a loading failure unless it is explained.
-            const MapRaster* sample = map_libraries_[layer].windowFor(
-                frame_origin_.latitude_deg, frame_origin_.longitude_deg);
-            if (sample) {
-                const double window_m =
-                    (sample->northEdge() - sample->southEdge()) * 110574.0 * 0.5;
-                if (window_m < options_.half_extent_m) {
-                    std::cerr << "georay: " << layer_names[layer] << " windows are about "
-                              << int(window_m) << " m across against a " << int(terrain_->halfExtent())
-                              << " m terrain window, so the scene edges will show bare terrain."
-                                 " Use --extent " << int(window_m) << " or fetch wider windows.\n";
-                }
-            }
+    tiles_ = std::make_unique<TileCache>(options_.tile_directory);
+    if (options_.online) {
+        if (!TileFetcher::curlAvailable()) {
+            std::cerr << "georay: --online needs the curl binary on the PATH; "
+                         "staying offline\n";
         } else {
-            std::cerr << "georay: " << error << "\n";
+            fetcher_ = std::make_unique<TileFetcher>(options_.tile_directory,
+                                                     options_.online_tile_limit,
+                                                     options_.online_delay_s);
+            fetcher_->start();
+            std::cout << "georay: online, fetching missing tiles (limit "
+                      << options_.online_tile_limit << " this session)\n";
         }
     }
-
+    const std::string requested[2] = {options_.satellite_source, options_.street_source};
+    const char* layer_names[2] = {"satellite", "street map"};
     for (int layer = 0; layer < 2; ++layer) {
-        if (map_from_library_[layer] || layer_paths[layer].empty()) continue;
-        std::string error;
-        if (!MapRaster::load(layer_paths[layer], maps_[layer], error)) {
-            // Same reasoning as a missing DEM: the tool works without it, so
-            // say what is wrong and carry on rather than refusing to start.
-            std::cerr << "georay: " << error << "\n"
-                      << "georay: continuing without the " << layer_names[layer]
-                      << " layer; run scripts/fetch_map.py\n";
-            maps_[layer] = MapRaster();
+        if (requested[layer].empty() || requested[layer] == "none") continue;
+        map_sources_[layer] = findTileSource(requested[layer]);
+        if (!map_sources_[layer]) {
+            std::cerr << "georay: unknown tile source '" << requested[layer] << "' for the "
+                      << layer_names[layer] << " layer; known sources are "
+                      << tileSourceNames() << "\n";
             continue;
         }
-        if (!scene_->setMapRaster(layer, maps_[layer])) {
-            std::cerr << "georay: " << scene_->error() << "\n";
-            maps_[layer] = MapRaster();  // so the HUD cannot claim a layer that is not there
-            continue;
-        }
-        map_is_imagery_[layer] = (layer == 0);
-        std::cout << "georay: " << layer_names[layer] << " " << maps_[layer].width() << "x"
-                  << maps_[layer].height() << " at zoom " << maps_[layer].zoom() << ", "
-                  << maps_[layer].metresPerPixel(frame_origin_.latitude_deg) << " m/pixel, "
-                  << maps_[layer].attribution() << "\n";
+        map_is_imagery_[layer] = map_sources_[layer]->imagery;
     }
-    selectMapWindow();
 
-    // Start on the requested layer, falling back to whichever actually
-    // loaded - asking for satellite and silently getting bare terrain
-    // because the file was missing would be confusing.
+    map_box_ = mapBox();
+    updateMapTextures(/*force=*/true);
+    for (int layer = 0; layer < 2; ++layer) {
+        if (!map_sources_[layer]) continue;
+        const MapTexture::Result& r = map_results_[layer];
+        std::cout << "georay: " << layer_names[layer] << " " << map_sources_[layer]->name
+                  << " z" << r.zoom << " " << r.width << "x" << r.height << " "
+                  << r.metres_per_pixel << " m/px, " << r.tiles_present << "/"
+                  << r.tiles_wanted << " tiles";
+        if (r.tiles_present == 0) std::cout << " - nothing cached for this area";
+        std::cout << "\n";
+    }
+
+    // Start on the requested layer, falling back to whichever has pixels -
+    // asking for satellite and silently getting bare terrain because nothing
+    // was cached would be confusing.
     map_layer_ = -1;
-    if (options_.map_mode == "street" && maps_[1].valid()) {
+    if (options_.map_mode == "street" && map_results_[1].tiles_present > 0) {
         map_layer_ = 1;
     } else if (options_.map_mode != "off") {
         for (int layer = 0; layer < 2; ++layer) {
-            if (maps_[layer].valid()) { map_layer_ = layer; break; }
+            if (map_results_[layer].tiles_present > 0) { map_layer_ = layer; break; }
         }
     }
 
@@ -370,40 +350,86 @@ bool App::buildWorld() {
     return true;
 }
 
-bool App::selectMapWindow() {
+MercatorBox App::mapBox() const {
+    // The terrain window's own extent, so map and ground line up edge to
+    // edge. Slightly larger, because the terrain mesh reaches exactly to the
+    // half-extent and a texture that stopped there would show its clamp
+    // colour along the rim.
+    return MercatorBox::around(frame_origin_.latitude_deg, frame_origin_.longitude_deg,
+                               terrain_->halfExtent() * 1.02);
+}
+
+int App::wantedMapZoom(const TileSource& source) const {
+    // What one screen pixel covers on the ground, from whichever of the two
+    // views is more demanding. The simulated camera usually wins - it is
+    // close to the ground - but when it is pointed at the horizon the 3D view
+    // is the one that needs the detail.
+    const double view_mpp = 2.0 * double(view_camera_.distance()) *
+                            std::tan(glm::radians(55.0) * 0.5) / std::max(height_, 1);
+    double camera_mpp = view_mpp;
+    if (hover_result_.valid && hover_result_.gsd_m > 0.0) {
+        camera_mpp = hover_result_.gsd_m;
+    } else if (pick_result_.valid && pick_result_.gsd_m > 0.0) {
+        camera_mpp = pick_result_.gsd_m;
+    }
+    const double wanted = std::min(view_mpp, camera_mpp);
+
+    // Two ceilings, and the lower wins.
+    //
+    // What the view wants, rounded up so the map is never coarser than the
+    // screen - and what the stitched texture can actually hold, rounded
+    // *down* for the opposite reason. A zoom finer than the pixel budget
+    // downloads four times the tiles for a picture that gets averaged back
+    // to the same thing.
+    const int from_view = zoomForResolution(frame_origin_.latitude_deg, wanted,
+                                            source.min_zoom, source.max_zoom);
+    const double box_width_m = terrain_->halfExtent() * 2.04;
+    const double budget_mpp = box_width_m / std::max(options_.map_max_pixels, 256);
+    const int from_budget = zoomNotFinerThan(frame_origin_.latitude_deg, budget_mpp,
+                                             source.min_zoom, source.max_zoom);
+    return std::min(from_view, from_budget);
+}
+
+bool App::updateMapTextures(bool force) {
+    if (!tiles_) return false;
     bool changed = false;
+
     for (int layer = 0; layer < 2; ++layer) {
-        if (!map_from_library_[layer]) continue;
+        const TileSource* source = map_sources_[layer];
+        if (!source) continue;
 
-        const MapRaster* window = map_libraries_[layer].windowFor(frame_origin_.latitude_deg,
-                                                                  frame_origin_.longitude_deg);
-        if (!window) {
-            // Flown off the edge of the fetched imagery. Drop the layer
-            // rather than leaving the last window stretched under the
-            // aircraft, which would put the wrong city on the ground.
-            if (maps_[layer].valid()) {
-                maps_[layer] = MapRaster();
-                scene_->clearMapLayer(layer);
-                changed = true;
-            }
-            continue;
-        }
+        // Only the visible layer is worth stitching. The other one costs the
+        // same decode and upload for pixels nobody is looking at, and M
+        // rebuilds it on the spot when it becomes visible.
+        if (!force && map_layer_ != layer) continue;
 
-        // Same window as last time: the pixels are already on the GPU.
-        if (maps_[layer].valid() && maps_[layer].zoom() == window->zoom() &&
-            maps_[layer].westEdge() == window->westEdge() &&
-            maps_[layer].northEdge() == window->northEdge()) {
-            continue;
-        }
+        const int zoom = wantedMapZoom(*source);
+        if (!force && zoom == map_zoom_[layer] && map_results_[layer].ok) continue;
 
-        std::cout << "georay: map window -> " << map_libraries_[layer].residentName()
-                  << " (layer " << layer << ")\n";
-        maps_[layer] = *window;
-        if (!scene_->setMapRaster(layer, maps_[layer])) {
-            std::cerr << "georay: " << scene_->error() << "\n";
-            maps_[layer] = MapRaster();
-        }
+        map_results_[layer] = map_textures_[layer].build(*tiles_, *source, map_box_, zoom,
+                                                         options_.map_max_pixels);
+        map_zoom_[layer] = map_results_[layer].zoom;
         changed = true;
+
+        // Ask for whatever was missing. The fetcher deduplicates and caps
+        // itself, so repeating a request for a tile the server does not have
+        // costs nothing.
+        if (fetcher_) {
+            for (const auto& tile : map_results_[layer].missing) {
+                fetcher_->request(*source, map_results_[layer].zoom, tile.first, tile.second);
+            }
+        }
+
+        if (map_results_[layer].tiles_present == 0) {
+            scene_->clearMapLayer(layer);
+            continue;
+        }
+        if (!scene_->setMapTexture(layer, map_textures_[layer].pixels().data(),
+                                   map_textures_[layer].width(),
+                                   map_textures_[layer].height())) {
+            std::cerr << "georay: " << scene_->error() << "\n";
+            scene_->clearMapLayer(layer);
+        }
     }
     return changed;
 }
@@ -448,7 +474,11 @@ void App::reanchorFrame(const Geodetic& new_origin) {
     // so the world is as large as the tiles on disk, not as large as one
     // window.
     if (dem_) loadDemTerrain();
-    selectMapWindow();
+    // The box moves with the frame, so the textures and the UVs that index
+    // them both have to be rebuilt - in that order, since the mesh bakes the
+    // box the textures were stitched for.
+    map_box_ = mapBox();
+    updateMapTextures(/*force=*/true);
     rebuildTerrainMesh();
 
     // Put the frame-dependent state back where it was on the ground.
@@ -501,11 +531,7 @@ void App::maybeReanchor() {
 }
 
 void App::rebuildTerrainMesh() {
-    const MapRaster* layers[Scene::kMapLayers] = {
-        maps_[0].valid() ? &maps_[0] : nullptr,
-        maps_[1].valid() ? &maps_[1] : nullptr,
-    };
-    scene_->buildTerrain(*terrain_, frame_, layers);
+    scene_->buildTerrain(*terrain_, frame_, map_box_);
 }
 
 bool App::loadMissionFile(const std::string& path) {
@@ -567,6 +593,10 @@ bool App::loadDemTerrain() {
 
 bool App::mapVisible() const { return map_layer_ >= 0 && scene_->hasMap(map_layer_); }
 
+bool App::mapLayerHasPixels(int layer) const {
+    return layer >= 0 && layer < 2 && map_sources_[layer] && map_results_[layer].tiles_present > 0;
+}
+
 bool App::mapIsImagery() const {
     return map_layer_ >= 0 && map_layer_ < 2 && map_is_imagery_[map_layer_];
 }
@@ -579,7 +609,7 @@ const char* App::mapLayerName() const {
 bool App::showStructures() const {
     // They exist to give synthetic terrain recognisable features with real
     // parallax. Real elevation data and real imagery already have both.
-    return !using_dem_ && !maps_[0].valid() && !maps_[1].valid();
+    return !using_dem_ && !mapLayerHasPixels(0) && !mapLayerHasPixels(1);
 }
 
 void App::buildStructures() {
@@ -745,8 +775,11 @@ void App::onKeyDown(const SDL_Keysym& key) {
             // loaded, so M always does something visible.
             for (int step = 0; step < 3; ++step) {
                 map_layer_ = (map_layer_ + 2) % 3 - 1;  // 0 -> 1 -> -1 -> 0
-                if (map_layer_ < 0 || maps_[map_layer_].valid()) break;
+                if (map_layer_ < 0 || map_sources_[map_layer_]) break;
             }
+            // The layer just switched to may never have been stitched, since
+            // only the visible one is kept up to date.
+            if (map_layer_ >= 0) updateMapTextures(/*force=*/true);
             break;
         }
         case SDLK_TAB:
@@ -1036,6 +1069,30 @@ void App::update(double dt) {
         have_view_target_ = true;
     }
 
+    // Tiles arriving in the background change what a stitch would produce.
+    // Throttled, because a stitch decodes and uploads a few hundred tiles and
+    // doing it on every delivery would stutter the whole flight.
+    seconds_since_restitch_ += dt;
+    if (fetcher_ && seconds_since_restitch_ > 1.0) {
+        // Surface a fetcher problem once rather than per batch: a wrong URL
+        // or a missing curl otherwise shows up only as a map that never
+        // arrives, which looks like a slow network.
+        const std::string error = fetcher_->lastError();
+        if (!error.empty() && error != reported_fetch_error_) {
+            reported_fetch_error_ = error;
+            std::cerr << "georay: tile fetch: " << error << "\n";
+        }
+
+        const int delivered = fetcher_->fetched();
+        if (delivered != last_seen_fetched_) {
+            last_seen_fetched_ = delivered;
+            seconds_since_restitch_ = 0.0;
+            updateMapTextures(/*force=*/true);
+        }
+    }
+    // The view may have moved enough to want a different zoom.
+    updateMapTextures(/*force=*/false);
+
     if (show_footprint_) {
         footprint_ = computeFootprint(uav_, camera_, *terrain_, frame_, 10);
     }
@@ -1316,10 +1373,9 @@ void App::renderHud() {
         const bool show_gaps = using_dem_ && dem_report_.posts_filled > 0 && want(1.0f);
         const bool show_dem = using_dem_ && want(1.0f);
         const bool show_map_rows =
-            (maps_[0].valid() || maps_[1].valid()) && want(mapVisible() ? 2.0f : 1.0f);
+            (mapLayerHasPixels(0) || mapLayerHasPixels(1)) && want(mapVisible() ? 2.0f : 1.0f);
         const bool show_anchor = using_dem_ && want(1.0f);
-        const bool show_window =
-            (map_from_library_[0] || map_from_library_[1]) && want(1.0f);
+        const bool show_window = map_sources_[0] != nullptr && want(1.0f);
         // Last, because the route it describes is already drawn in the 3D
         // view, while the frame anchor appears nowhere else at all.
         const bool show_mission = has_mission_ && want(3.0f);
@@ -1341,35 +1397,15 @@ void App::renderHud() {
             c.row("MAP MODE", mapLayerName(),
                   mapVisible() ? colours::text_good : colours::text_dim);
             if (mapVisible()) {
-                // The map's ground resolution against the camera's own GSD is
-                // the number that says whether zooming in further can show
-                // you anything: below about one map pixel per camera pixel,
-                // the view is magnifying the basemap rather than resolving
-                // the ground.
-                const MapRaster& active = maps_[map_layer_];
-                c.row("MAP RES", num(active.metresPerPixel(frame_origin_.latitude_deg), 2) +
-                                     " M/PX Z" + std::to_string(active.zoom()),
+                // Ground resolution against the camera's own GSD is the
+                // number that says whether a finer zoom could show you
+                // anything. Below about one map pixel per camera pixel the
+                // view is magnifying the map rather than resolving ground.
+                const MapTexture::Result& r = map_results_[map_layer_];
+                c.row("MAP RES", num(r.metres_per_pixel, 2) + " M/PX Z" +
+                                     std::to_string(r.zoom),
                       colours::text_value);
             }
-        }
-        if (using_dem_) {
-            c.row("GEOID", geoid_.description(),
-                  geoid_.isIdentity() ? colours::text_warn : colours::text_value);
-            if (dem_report_.posts_filled > 0) {
-                // An interpolated post is an invented elevation. It is often
-                // the right thing to do, but never the right thing to hide.
-                c.row("DEM GAPS", num(dem_report_.gapFraction() * 100.0, 1) + " PCT FILLED",
-                      colours::text_warn);
-            }
-        }
-        if (!show_footprint_) {
-            c.row("FOOTPRINT", "HIDDEN (F)", colours::text_dim);
-        } else if (footprint_.complete) {
-            c.row("FOOTPRINT", num(footprint_.area_m2 / 1e6, 3) + " KM2", colours::text_value);
-        } else {
-            // An incomplete footprint has no area, and printing one anyway
-            // would be inventing a number for the most visible field here.
-            c.row("FOOTPRINT", "PARTLY OFF GROUND", colours::text_warn);
         }
         if (show_anchor) {
             // The floating origin, made visible. Without this the frame
@@ -1381,18 +1417,16 @@ void App::renderHud() {
                   colours::text_dim);
         }
         if (show_window) {
+            // Tile coverage for the visible layer. Anything short of complete
+            // means grey holes in the map, which is a missing-data condition
+            // and not a rendering fault.
             const int layer = map_layer_ >= 0 ? map_layer_ : 0;
-            const MapLibrary& library = map_libraries_[layer];
-            // The name carries the window's own position, which makes it
-            // long. Truncated to what the column holds, because a value that
-            // runs past its panel is worse than one that is abbreviated.
-            std::string name = library.residentName();
-            if (name.size() > 14) name = name.substr(0, 14) + "..";
-            c.row("MAP WINDOW",
-                  library.residentName().empty()
-                      ? std::string("NONE - NOT FETCHED")
-                      : name + " " + std::to_string(library.windowCount()),
-                  library.residentName().empty() ? colours::text_warn : colours::text_value);
+            const MapTexture::Result& r = map_results_[layer];
+            const bool complete = r.tiles_wanted > 0 && r.tiles_present == r.tiles_wanted;
+            c.row("MAP TILES", std::to_string(r.tiles_present) + "/" +
+                                   std::to_string(r.tiles_wanted) +
+                                   (complete ? "" : "  " + num(r.coverage() * 100.0, 0) + "%"),
+                  complete ? colours::text_dim : colours::text_warn);
         }
         if (show_mission) {
             c.blank();
@@ -1606,8 +1640,9 @@ void App::renderHud() {
         // fetched it gets credited wherever it is shown. Drawn whenever the
         // map is visible, at the bottom of the window where it is out of the
         // way but not hidden.
-        if (mapVisible() && !maps_[map_layer_].attribution().empty()) {
-            const std::string credit = maps_[map_layer_].attribution();
+        if (mapVisible() && map_sources_[map_layer_] &&
+            !map_sources_[map_layer_]->attribution.empty()) {
+            const std::string credit = map_sources_[map_layer_]->attribution;
             const float credit_h = text.lineHeight(TextRenderer::kSmall);
             const float width = text.textWidth(credit, TextRenderer::kSmall) + 10.0f;
             // Just above the camera panes rather than along the bottom edge,

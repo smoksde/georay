@@ -21,8 +21,11 @@
 #include "geo/camera_model.hpp"
 #include "geo/dem.hpp"
 #include "geo/geoid.hpp"
-#include "geo/maplibrary.hpp"
-#include "geo/maptile.hpp"
+#include "geo/mercator.hpp"
+#include "map/maptexture.hpp"
+#include "map/tilecache.hpp"
+#include "map/tilefetcher.hpp"
+#include "map/tilesource.hpp"
 #include "geo/mission.hpp"
 #include "geo/geolocate.hpp"
 #include "geo/pose.hpp"
@@ -55,15 +58,22 @@ public:
         double geoid_separation_m = 0.0;
         bool geoid_separation_given = false;
 
-        // Map rasters from scripts/fetch_map.py, draped over the terrain and
-        // switchable at runtime: satellite imagery and a drawn street map of
-        // the same ground.
-        std::string satellite_map_path;
-        std::string street_map_path;
-        // Directories of .map windows, streamed by position as the aircraft
-        // flies. These take precedence over the single-file paths above.
-        std::string satellite_map_dir;
-        std::string street_map_dir;
+        // Named tile sources for the two map layers, satellite and drawn.
+        // Both cover the same ground; M switches between them.
+        std::string satellite_source = "esri";
+        std::string street_source = "basemapde";
+        std::string tile_directory = "data/tiles";
+        // Longest side of a stitched map texture. Also the real cap on how
+        // fine a zoom is worth fetching: beyond it the tiles are downscaled
+        // away, so the zoom chooser stops there.
+        int map_max_pixels = 4096;
+
+        // Fetch missing tiles while flying. Off unless asked for: the
+        // self-test and CI must never touch the network, and nobody should
+        // discover they are downloading by accident.
+        bool online = false;
+        int online_tile_limit = 4000;
+        double online_delay_s = 0.25;
 
         // A QGroundControl .plan or a QGC WPL .waypoints list to fly.
         std::string mission_path;
@@ -122,6 +132,7 @@ private:
     // Whether the synthetic landmark towers belong in the scene at all.
     bool showStructures() const;
     bool mapVisible() const;
+    bool mapLayerHasPixels(int layer) const;
     bool mapIsImagery() const;
     const char* mapLayerName() const;
     void resetSimulation();
@@ -152,7 +163,14 @@ private:
     void reanchorFrame(const Geodetic& new_origin);
     // Picks the map window covering the frame origin, for each layer that is
     // backed by a library. Returns true if anything changed.
-    bool selectMapWindow();
+    // Re-stitches whichever layers need it: when the frame has moved, or
+    // when the view has changed enough to want a different zoom.
+    bool updateMapTextures(bool force);
+    // The zoom whose detail matches what is currently on screen.
+    int wantedMapZoom(const TileSource& source) const;
+    // The geographic box the map textures cover - the terrain window's own
+    // extent, so the two line up edge to edge.
+    MercatorBox mapBox() const;
     // Re-anchors when the aircraft has drifted far enough from the origin
     // that the terrain window no longer comfortably surrounds it.
     void maybeReanchor();
@@ -231,11 +249,19 @@ private:
     // Layer 0 is satellite imagery, layer 1 a drawn street map. Both are
     // kept resident so switching is instant; a 50 MB raster each is cheaper
     // than re-reading and re-uploading on a keypress.
-    MapRaster maps_[2];
+    // Tiles on disk, decoded on demand, shared by both layers.
+    std::unique_ptr<TileCache> tiles_;
+    std::unique_ptr<TileFetcher> fetcher_;
+    // Re-stitch when the fetcher has delivered since the last build.
+    int last_seen_fetched_ = 0;
+    std::string reported_fetch_error_;
+    double seconds_since_restitch_ = 0.0;
+    const TileSource* map_sources_[2] = {nullptr, nullptr};
+    MapTexture map_textures_[2];
+    MapTexture::Result map_results_[2];
+    MercatorBox map_box_;
+    int map_zoom_[2] = {0, 0};
     bool map_is_imagery_[2] = {true, false};
-    // Layers backed by a directory of windows rather than a single file.
-    MapLibrary map_libraries_[2];
-    bool map_from_library_[2] = {false, false};
     Terrain::DemLoadReport dem_report_;
     bool using_dem_ = false;
     // A flat ground model at the frame origin's elevation, used only to

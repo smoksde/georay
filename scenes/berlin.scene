@@ -15,7 +15,7 @@ origin            52.5163,13.3777
 extent            2000
 
 dem               data/dem
-map               data/berlin.map
+map-satellite     esri
 
 # EGM96 separation for northern Germany, to about a metre. Without it every
 # reported elevation is off by this much - see README.

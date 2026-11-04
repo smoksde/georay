@@ -214,87 +214,74 @@ the frame re-anchors), and one geoid constant is good to a couple of metres
 across a whole Land rather than the few centimetres it manages over a single
 scene.
 
-## Real maps and satellite imagery
+## Maps: fetched live, drawn at the zoom the view needs
 
-A map raster draped over the terrain is what makes a flat city worth flying.
-Berlin is 36–40 m above sea level and essentially level, so elevation data
-alone shows you nothing there; with the basemap, the simulated camera looks at
-real streets and a geolocated pixel can be checked against a place you can
-name.
+The map is stitched from tiles at run time, not assembled ahead of it. Two
+things follow.
+
+**The zoom matches the view.** A texture covers a fixed geographic box, so its
+texture coordinates depend on that box alone — re-stitch at a finer zoom and
+every coordinate already baked into the terrain mesh stays where it was. The
+map sharpens without the mesh being touched. georay picks the zoom from
+whichever of the two views is more demanding, bounded by what the texture can
+hold: fetching a zoom finer than the pixel budget would download four times
+the tiles for a picture that gets averaged back to the same thing.
+
+**Tiles can arrive while you fly.**
 
 ```bash
-scripts/fetch_map.py --source esri --origin 52.5163,13.3777 --extent 1200 --zoom 18 --max-tiles 800 --out data/berlin_sat.map
+./build/georay --scene brandenburg --online
 ```
 
-Two layers can be loaded at once and switched with `M`:
+Missing tiles are requested as the stitcher finds the gaps, fetched on a
+worker thread, and the map re-stitches as they land. The render loop never
+waits on a socket.
+
+`--online` is off by default, and the fetcher lives in the app layer rather
+than in `georay_geo`, so `--selftest` is still a pure numeric suite with
+nothing to reach out to. It is rate-limited, capped per session
+(`--tile-limit`), identifies itself, and writes into the same cache
+`scripts/fetch_map.py` uses — neither re-downloads what the other already has.
+
+It shells out to the `curl` binary rather than linking libcurl. That keeps the
+build dependency-free, which is the property this project is organised around,
+and curl handles TLS, redirects, retries and parallelism properly. libcurl is
+the drop-in upgrade if the process boundary ever becomes the limit.
+
+### Pre-fetching
+
+Not required, but useful before a demo or somewhere without connectivity:
 
 ```bash
-scripts/fetch_map.py --source basemapde --origin 52.5163,13.3777 --extent 1200 --zoom 18 --max-tiles 800 --out data/berlin_map.map
+scripts/fetch_map.py --along missions/berlin-survey.plan --window 900 --zoom 17
+```
+```bash
+scripts/fetch_map.py --region 51.36,11.27,53.56,14.77 --zoom 12 --source basemapde --max-tiles 3000
 ```
 
 | `--source` | What you get |
 | --- | --- |
-| `esri` | Satellite imagery — makes the simulated camera look like an actual UAV feed |
-| `basemapde` | Official German cartography in muted greyscale. Far calmer than OSM's standard style: no colour-coded land use, labels that stay out of the way. Germany only |
+| `esri` | Satellite imagery, to z19 — makes the camera view look like a real UAV feed |
+| `basemapde` | Official German cartography in muted greyscale, to z18. Far calmer than OSM's standard style. Germany only |
 | `basemapde-colour` | The same, in colour |
 | `osm` | OpenStreetMap's standard style — busiest of the four |
 
-![street map mode](docs/screenshot-map.png)
+Tile servers have usage policies and they are not alike: OpenStreetMap's is
+donated volunteer infrastructure and treats runs over 250 tiles as bulk
+downloading, while basemap.de is a government open-data service funded to be
+used. `--max-tiles` defaults to OSM's line; raise it deliberately.
 
-*`M` switched to the street-map layer: the same ground, same registration,
-without the visual noise of a full-colour basemap.*
+The attribution for whichever source is visible is drawn on screen.
 
-`--url` takes any XYZ template you are licensed to use. A drawn map also gets
-different treatment in the shader than imagery does: almost no directional
-shading and no contour lines, because a map is already a deliberate flat
-picture and lighting it fights its own design.
+### What this is not
 
-**Resolution runs out on the map long before it runs out on the camera.** At
-400 m the camera's ground sample distance is about 44 cm; the Berlin imagery
-is about 61 cm per pixel after scaling. Fly lower and the view magnifies
-basemap pixels rather than resolving more ground — at 200 m the camera sees
-about 11 cm per pixel, finer than any public basemap. The HUD shows both
-numbers so the limit is visible rather than mysterious, and the default scene
-flies at 400 m precisely to keep them matched.
-
-`--max-pixels` (default 4096) scales the stitched raster down to something a
-GPU will hold. georay checks `GL_MAX_TEXTURE_SIZE` and reports a raster that
-is too large, because the alternative is an upload that silently does nothing
-and terrain that looks like the map file was never found.
-
-Tiles come from OpenStreetMap by default. Their servers are a donated resource
-with a [usage policy](https://operations.osmfoundation.org/policies/tiles/):
-identify yourself, don't bulk download, cache what you fetch, and credit the
-project. The script does all four — real User-Agent, rate limited, per-tile
-cache, and it refuses runs over `--max-tiles` (250, OSM's bulk threshold). The
-attribution string travels *inside* the raster so georay displays it whenever
-the map is on screen. `--url` points it at any XYZ service you are licensed to
-use; aerial imagery makes the camera view look like a real UAV feed, but
-essentially every imagery provider wants an account and their own terms.
-
-**Web Mercator is handled properly, not approximated.** Map tiles are not in
-latitude and longitude — their y axis is the Mercator projection, which is
-distinctly non-linear in latitude. Treating it as linear would slide the map
-off the ground by over a metre across a 4 km scene: small enough to look fine,
-large enough to matter for a tool that reports positions in metres. georay
-applies the same forward transform the fetch script laid the raster out with,
-once per terrain post.
-
-### Verified against real landmarks
-
-Three independently-known Berlin coordinates were projected through the full
-chain — pose, intrinsics, projection, Mercator UV, render — and checked against
-where they land in the rendered camera view:
-
-| Landmark | Projected to |
-| --- | --- |
-| Brandenburg Gate (52.51628, 13.37771) | the gate's colonnade at the head of Pariser Platz |
-| Holocaust Memorial (52.51390, 13.37859) | its stelae field |
-| Reichstag (52.51864, 13.37612) | the Reichstag building, glass dome and all |
-
-Done on both the street map and the satellite imagery, which are independent
-rasters at different zooms — so this checks the Mercator registration, not
-just one file.
+Vector tiles. Tiles are raster, so a zoom level has a native resolution and
+magnifying past it blurs — zoom-matching avoids that by fetching a finer level
+rather than by being resolution-independent. True crispness at any
+magnification needs vector tiles (basemap.de and OpenFreeMap both serve them,
+free and without a key) plus a renderer for them: geometry decoding,
+tessellation, line stroking and label placement. That is a different and much
+larger piece of work.
 
 ## Real elevation data
 
