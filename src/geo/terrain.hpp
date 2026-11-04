@@ -126,7 +126,6 @@ public:
 
     double halfExtent() const { return half_extent_m_; }
     int resolution() const { return resolution_; }
-    double baseElevation() const { return base_elevation_m_; }
     double minHeight() const { return min_height_; }
     double maxHeight() const { return max_height_; }
 

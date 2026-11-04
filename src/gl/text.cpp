@@ -301,8 +301,6 @@ void TextRenderer::initialise(const std::string& font_path) {
 
     if (loadBakedAtlas(font_path, pixels, width, height)) {
         baked_ = true;
-        const size_t slash = font_path.find_last_of("/\\");
-        font_name_ = slash == std::string::npos ? font_path : font_path.substr(slash + 1);
     } else {
         // Say so. A silent fallback to 3x5 capitals looks like a rendering
         // bug rather than a missing file.

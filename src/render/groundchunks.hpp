@@ -54,7 +54,6 @@ public:
     GroundChunks(const GroundChunks&) = delete;
     GroundChunks& operator=(const GroundChunks&) = delete;
 
-    void setResidentLimit(size_t chunks) { resident_limit_ = chunks > 1 ? chunks : 1; }
     void setMode(GroundMode mode);
     GroundMode mode() const { return mode_; }
 

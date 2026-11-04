@@ -63,10 +63,6 @@ public:
         std::string satellite_source = "esri";
         std::string street_source = "basemapde";
         std::string tile_directory = "data/tiles";
-        // Longest side of a stitched map texture. Also the real cap on how
-        // fine a zoom is worth fetching: beyond it the tiles are downscaled
-        // away, so the zoom chooser stops there.
-        int map_max_pixels = 4096;
 
         // Fetch missing tiles while flying. Off unless asked for: the
         // self-test and CI must never touch the network, and nobody should

@@ -1181,14 +1181,18 @@ void App::renderHud() {
         void blank() { y += line_h * 0.45f; }
     };
 
+    auto edgeRect = [&](float x, float y, float w, float h, const glm::vec4& colour) {
+        lines.addSegment({x, y, 0}, {x + w, y, 0}, colour);
+        lines.addSegment({x + w, y, 0}, {x + w, y + h, 0}, colour);
+        lines.addSegment({x + w, y + h, 0}, {x, y + h, 0}, colour);
+        lines.addSegment({x, y + h, 0}, {x, y, 0}, colour);
+    };
+
     auto panel = [&](float x, float y, float w, float h) {
         fills.addQuad({x, y}, {w, h}, colours::panel);
         // A one-pixel frame: enough to separate the panel from the terrain
         // behind it without drawing attention to itself.
-        lines.addSegment({x, y, 0}, {x + w, y, 0}, colours::panel_edge);
-        lines.addSegment({x + w, y, 0}, {x + w, y + h, 0}, colours::panel_edge);
-        lines.addSegment({x + w, y + h, 0}, {x, y + h, 0}, colours::panel_edge);
-        lines.addSegment({x, y + h, 0}, {x, y, 0}, colours::panel_edge);
+        edgeRect(x, y, w, h, colours::panel_edge);
     };
 
     // Where the bottom-left readout begins. The left column has to stop above
@@ -1436,12 +1440,7 @@ void App::renderHud() {
 
         const glm::vec4 edge = focused_camera_ == kLiveCamera ? colours::text_label
                                                               : colours::panel_edge;
-        lines.addSegment({rect.x, rect.y, 0}, {rect.x + rect.z, rect.y, 0}, edge);
-        lines.addSegment({rect.x + rect.z, rect.y, 0}, {rect.x + rect.z, rect.y + rect.w, 0},
-                         edge);
-        lines.addSegment({rect.x + rect.z, rect.y + rect.w, 0}, {rect.x, rect.y + rect.w, 0},
-                         edge);
-        lines.addSegment({rect.x, rect.y + rect.w, 0}, {rect.x, rect.y, 0}, edge);
+        edgeRect(rect.x, rect.y, rect.z, rect.w, edge);
 
         // Corner brackets, so an empty pane still reads as a video frame
         // rather than as a hole in the interface.
@@ -1478,12 +1477,7 @@ void App::renderHud() {
         const glm::vec4 rect = cameraRect(kSimulatedCamera);
         const glm::vec4 edge = focused_camera_ == kSimulatedCamera ? colours::text_label
                                                                    : colours::panel_edge;
-        lines.addSegment({rect.x, rect.y, 0}, {rect.x + rect.z, rect.y, 0}, edge);
-        lines.addSegment({rect.x + rect.z, rect.y, 0}, {rect.x + rect.z, rect.y + rect.w, 0},
-                         edge);
-        lines.addSegment({rect.x + rect.z, rect.y + rect.w, 0}, {rect.x, rect.y + rect.w, 0},
-                         edge);
-        lines.addSegment({rect.x, rect.y + rect.w, 0}, {rect.x, rect.y, 0}, edge);
+        edgeRect(rect.x, rect.y, rect.z, rect.w, edge);
 
         // The principal point, which is where the boresight lands - not
         // necessarily the middle of the frame, and drawing it at the middle

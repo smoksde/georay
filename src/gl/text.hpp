@@ -41,8 +41,6 @@ public:
     // Builds the glyph texture, from `font_path` if it loads and from the
     // built-in 3x5 font otherwise. Needs a current GL context.
     void initialise(const std::string& font_path);
-    bool usingBakedFont() const { return baked_; }
-    const std::string& fontName() const { return font_name_; }
 
     // Queue a string. `position` is the top-left of the first line, in window
     // pixels with y downwards. Newlines start a new line at the same x.
@@ -59,9 +57,6 @@ public:
     // Draws everything queued since the last flush. The shader must already
     // be bound with its projection set.
     void flush();
-
-    GLuint atlasTexture() const { return texture_; }
-    bool ready() const { return texture_ != 0; }
 
 private:
     struct FaceInfo {
@@ -99,7 +94,6 @@ private:
     FaceInfo faces_[kFaceCount];
     int first_char_ = 32, char_count_ = 95;
     bool baked_ = false;
-    std::string font_name_ = "BUILT-IN 3X5";
 
     std::vector<Vertex> vertices_;
     GLuint vao_ = 0, vbo_ = 0, texture_ = 0;

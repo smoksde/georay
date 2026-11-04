@@ -64,19 +64,6 @@ void PrimitiveBatch::addSegment(const glm::vec3& a, const glm::vec3& b, const gl
     vertices_.push_back({b, cb});
 }
 
-void PrimitiveBatch::addPolyline(const std::vector<glm::vec3>& points, const glm::vec4& colour,
-                            bool closed) {
-    if (points.size() < 2) return;
-    for (size_t i = 0; i + 1 < points.size(); ++i) addSegment(points[i], points[i + 1], colour);
-    if (closed) addSegment(points.back(), points.front(), colour);
-}
-
-void PrimitiveBatch::addCross(const glm::vec3& c, float s, const glm::vec4& colour) {
-    addSegment(c - glm::vec3(s, 0, 0), c + glm::vec3(s, 0, 0), colour);
-    addSegment(c - glm::vec3(0, s, 0), c + glm::vec3(0, s, 0), colour);
-    addSegment(c - glm::vec3(0, 0, s), c + glm::vec3(0, 0, s), colour);
-}
-
 void PrimitiveBatch::addBox(const glm::vec3& c, const glm::vec3& h, const glm::vec4& colour) {
     glm::vec3 corner[8];
     for (int i = 0; i < 8; ++i) {

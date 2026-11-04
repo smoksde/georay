@@ -81,11 +81,9 @@ public:
     // The route in ENU, for drawing it.
     const std::vector<glm::dvec3>& routeEnu() const { return route_; }
     int currentLeg() const { return current_leg_; }
-    double distanceAlongRoute() const { return along_route_m_; }
     double routeLength() const { return route_length_m_; }
 
     void reset() { elapsed_s_ = 0.0; along_route_m_ = 0.0; current_leg_ = 0; }
-    double elapsed() const { return elapsed_s_; }
 
     // Advances the pattern and writes position, attitude and (unless the
     // gimbal is Fixed) gimbal angles into `state`.

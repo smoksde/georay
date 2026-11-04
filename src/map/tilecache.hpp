@@ -46,8 +46,6 @@ public:
 
     void clearMemory();
     size_t residentTiles() const { return resident_.size(); }
-    int decodeCount() const { return decode_count_; }
-    int failureCount() const { return failure_count_; }
     const std::string& lastError() const { return last_error_; }
 
 private:
@@ -63,8 +61,6 @@ private:
     std::list<std::string> recent_;
     std::map<std::string, bool> unreadable_;
 
-    int decode_count_ = 0;
-    int failure_count_ = 0;
     std::string last_error_;
 };
 

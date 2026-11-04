@@ -82,10 +82,6 @@ public:
     // Draws every resident ground chunk.
     void drawGround();
     PrimitiveBatch& world() { return world_lines_; }
-    // Translucent world-space triangles - the imaged area and the frustum
-    // volume. Thin lines alone vanish at a distance; a filled surface still
-    // reads as a shape when it is twenty pixels across.
-    PrimitiveBatch& worldFills() { return world_fills_; }
 
     // A segment drawn as a camera-facing ribbon of constant screen width.
     //
@@ -143,6 +139,9 @@ private:
 
     GroundChunks ground_;
     PrimitiveBatch world_lines_{PrimitiveBatch::Mode::Lines};
+    // Translucent world-space triangles - the imaged area's footprint fill.
+    // Thin lines alone vanish at a distance; a filled surface still reads as
+    // a shape when it is twenty pixels across.
     PrimitiveBatch world_fills_{PrimitiveBatch::Mode::Triangles};
     PrimitiveBatch overlay_lines_{PrimitiveBatch::Mode::Lines};
     PrimitiveBatch overlay_fills_{PrimitiveBatch::Mode::Triangles};

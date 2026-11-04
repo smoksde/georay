@@ -64,7 +64,6 @@ const DecodedTile* TileCache::get(const std::string& source, int zoom, int x, in
     const std::streamsize size = file.tellg();
     if (size <= 0 || size_t(size) > kMaxTileBytes) {
         unreadable_[id] = true;
-        ++failure_count_;
         last_error_ = path + ": implausible size";
         return nullptr;
     }
@@ -76,7 +75,6 @@ const DecodedTile* TileCache::get(const std::string& source, int zoom, int x, in
     file.read(reinterpret_cast<char*>(encoded.data()), size);
     if (file.gcount() != size) {
         unreadable_[id] = true;
-        ++failure_count_;
         last_error_ = path + ": short read";
         return nullptr;
     }
@@ -88,7 +86,6 @@ const DecodedTile* TileCache::get(const std::string& source, int zoom, int x, in
         // Most often a half-written file from an interrupted fetch, or an
         // error page saved with a .img name.
         unreadable_[id] = true;
-        ++failure_count_;
         last_error_ = path + ": not a decodable image";
         return nullptr;
     }
@@ -117,7 +114,6 @@ const DecodedTile* TileCache::get(const std::string& source, int zoom, int x, in
     }
     stbi_image_free(pixels);
 
-    ++decode_count_;
     resident_[id] = std::move(tile);
     recent_.push_back(id);
 

@@ -69,12 +69,6 @@ public:
     void addSegment(const glm::vec3& a, const glm::vec3& b, const glm::vec4& colour);
     void addSegment(const glm::vec3& a, const glm::vec3& b, const glm::vec4& colour_a,
                     const glm::vec4& colour_b);
-    // Connects consecutive points; `closed` adds the wrap-around segment.
-    void addPolyline(const std::vector<glm::vec3>& points, const glm::vec4& colour,
-                     bool closed = false);
-    // A three-axis cross, for marking a point in space where a dot would be
-    // ambiguous about depth.
-    void addCross(const glm::vec3& centre, float size, const glm::vec4& colour);
     void addBox(const glm::vec3& centre, const glm::vec3& half_extent, const glm::vec4& colour);
     // A circle in the horizontal plane, for ground markers and range rings.
     void addCircleXY(const glm::vec3& centre, float radius, const glm::vec4& colour,
@@ -91,8 +85,6 @@ public:
 
     // Uploads whatever has accumulated and draws it.
     void flush();
-
-    size_t vertexCount() const { return vertices_.size(); }
 
 private:
     struct Vertex {
