@@ -86,8 +86,14 @@ void main() {
 
     // Distance haze, so the horizon does not end in a hard edge and the eye
     // gets a depth cue in a scene that is otherwise untextured.
+    //
+    // Barely any of it on a drawn map. Atmospheric haze over flat cartography
+    // is a category error - there is no air between the viewer and a map -
+    // and at regional scale, where everything is tens of kilometres away, it
+    // saturates and bleaches the whole sheet to pale grey.
     float distance_m = length(v_world - u_camera_position);
-    float haze = clamp(distance_m / 12000.0, 0.0, mapped ? 0.35 : 0.65);
+    float haze_limit = mapped ? (u_map_is_imagery == 1 ? 0.35 : 0.10) : 0.65;
+    float haze = clamp(distance_m / 12000.0, 0.0, haze_limit);
     colour = mix(colour, vec3(0.52, 0.60, 0.70), haze);
 
     frag_colour = vec4(colour, 1.0);

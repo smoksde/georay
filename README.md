@@ -200,6 +200,11 @@ gigabyte on disk. `--region` tiles a bounding box the way `--along` tiles a
 route, and the windows overlap by the same 25% so the aircraft never crosses
 a seam with nothing on either side.
 
+![Berlin and Brandenburg on the regional map](docs/screenshot-region.png)
+
+*`--scene brandenburg`: 40 km of ground in one window at 23 m/px, streamed
+from 72 of them covering the whole Land.*
+
 It is a *regional* view, not a camera view. At 23 m/px the simulated camera at
 400 m is magnifying map pixels about fifty times; fly one of the Berlin scenes
 for anything meant to be looked at. Two other things are worth knowing at this
