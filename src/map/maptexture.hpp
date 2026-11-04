@@ -2,17 +2,15 @@
 
 // The map image under the terrain, stitched from tiles at run time.
 //
-// This replaces the pre-assembled .map raster, and the difference is the
-// whole point of zoom-matched detail: the image covers a fixed geographic
-// box, so its texture coordinates are a function of that box alone. Re-stitch
-// it at a different zoom - a different tile grid, a different pixel count -
-// and every UV already baked into the terrain mesh stays exactly where it
-// was. The map gets sharper without the mesh being touched.
+// The image covers a fixed geographic box, so its texture coordinates are a
+// function of that box alone - re-stitch at a different zoom and every UV
+// already baked into the terrain mesh stays exactly where it was. The map
+// gets sharper without the mesh being touched.
 //
-// What it is not is more detail at every scale. Tiles are generalised per
-// zoom, so a higher zoom brings finer pixels *and* more features, while
-// magnifying a fixed zoom only ever brings blur. Choosing the zoom from the
-// viewing distance is what keeps the two matched.
+// Not more detail at every scale: tiles are generalised per zoom, so a
+// higher zoom brings finer pixels *and* more features, while magnifying a
+// fixed zoom only brings blur. Choosing zoom from viewing distance keeps the
+// two matched.
 
 #include <string>
 #include <vector>
@@ -25,8 +23,7 @@ namespace georay {
 
 class MapTexture {
 public:
-    // How the stitch went. Reported rather than returned-and-forgotten,
-    // because a map that is 40 per cent grey holes is a different thing from
+    // How the stitch went - a map 40% grey holes is a different thing from
     // a complete one, and the difference has to be visible.
     struct Result {
         bool ok = false;

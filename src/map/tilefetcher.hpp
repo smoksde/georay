@@ -2,11 +2,9 @@
 
 // Fetches missing map tiles while the simulation runs.
 //
-// georay was deliberately offline: scripts/fetch_map.py did the downloading
-// and the binary only ever read files. That bought three things worth
-// keeping - the self-test runs with no network, the binary carries no TLS
-// stack, and bulk downloading stays a deliberate act - and none of them
-// actually require the whole program to be offline. They require this:
+// georay was deliberately offline - scripts/fetch_map.py did the
+// downloading, the binary only read files - for three properties worth
+// keeping even once live fetching is allowed:
 //
 //   * the fetcher lives in the app layer, never in georay_geo, so --selftest
 //     is still a pure numeric suite with nothing to reach out to;
@@ -15,11 +13,10 @@
 //     neither re-downloads what the other already has;
 //   * it is off unless asked for, rate-limited, and capped per session.
 //
-// It shells out to the curl binary rather than linking libcurl. That keeps
-// georay's build dependency-free, which is the property the whole project is
-// organised around, and curl handles TLS, redirects, retries and parallelism
-// properly. libcurl is the drop-in upgrade if the process boundary ever
-// becomes the limiting factor.
+// Shells out to curl rather than linking libcurl - keeps the build
+// dependency-free and gets TLS/redirects/retries/parallelism for free.
+// libcurl is the drop-in upgrade if the process boundary ever becomes the
+// limiting factor.
 
 #include <atomic>
 #include <condition_variable>
@@ -57,8 +54,8 @@ public:
     bool limitReached() const { return fetched_.load() + failed_.load() >= session_limit_; }
     std::string lastError() const;
 
-    // Whether the curl binary can be found at all. Checked once, so a machine
-    // without it says so instead of failing silently per batch.
+    // Checked once, so a machine without curl says so instead of failing
+    // silently per batch.
     static bool curlAvailable();
 
 private:

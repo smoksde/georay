@@ -1,10 +1,7 @@
 #pragma once
 
-// Where map tiles come from, and under what terms.
-//
-// Kept together because a URL without its attribution is a licence breach
-// waiting to happen: whoever changes the source has to change the credit in
-// the same place, and georay displays whatever this says.
+// Where map tiles come from, and under what terms - kept together so a URL
+// change cannot drift from its credit, which georay displays as given here.
 
 #include <string>
 

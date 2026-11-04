@@ -2,16 +2,13 @@
 
 // Map tiles on disk, decoded into pixels.
 //
-// Shares its directory and naming with scripts/fetch_map.py - "<source>_<z>_
-// <x>_<y>.img" - so a tile fetched by either is usable by both. That matters
-// more than it sounds: the script remains the way to grab a region in bulk,
-// and the live fetcher the way to fill gaps while flying, and neither should
-// re-download what the other already has.
+// Shares its directory and naming ("<source>_<z>_<x>_<y>.img") with
+// scripts/fetch_map.py, so a tile fetched by either is usable by both and
+// neither re-downloads what the other has.
 //
-// Decoding happens here because the map is now stitched at run time rather
-// than pre-assembled in Python. That is what buys zoom-matched detail - the
-// texture can be rebuilt at any resolution - and it is why georay now carries
-// an image decoder at all.
+// Decoded here because the map is stitched at run time, not pre-assembled
+// in Python - what buys zoom-matched detail, and why georay carries an
+// image decoder at all.
 
 #include <cstdint>
 #include <list>
@@ -55,8 +52,8 @@ private:
     size_t memory_limit_;
 
     // Least-recently-used first. A 256x256 RGB tile is 192 KB, so a few
-    // hundred is tens of megabytes - but unbounded it would be the whole
-    // region, which is the thing streaming exists to avoid.
+    // hundred is tens of MB; unbounded it would be the whole region -
+    // exactly what streaming exists to avoid.
     std::map<std::string, DecodedTile> resident_;
     std::list<std::string> recent_;
     std::map<std::string, bool> unreadable_;

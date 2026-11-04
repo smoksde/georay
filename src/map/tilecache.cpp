@@ -3,9 +3,8 @@
 #include <algorithm>
 #include <fstream>
 
-// Only the two formats tile servers actually serve. Every other decoder stb
-// offers is switched off, so a malformed tile has a smaller surface to go
-// wrong in.
+// Only the two formats tile servers actually serve - every other decoder stb
+// offers is switched off, shrinking the surface a malformed tile can exploit.
 #define STB_IMAGE_IMPLEMENTATION
 #define STBI_ONLY_PNG
 #define STBI_ONLY_JPEG
@@ -16,9 +15,9 @@
 namespace georay {
 namespace {
 
-// A tile file should be a few tens of kilobytes. The cap is not about disk,
-// it is about not handing an arbitrary-length buffer to a decoder because
-// something unexpected is sitting in the cache directory.
+// A tile should be a few tens of KB; the cap guards against handing an
+// arbitrary-length buffer to the decoder if something odd lands in the
+// cache directory.
 constexpr size_t kMaxTileBytes = 16u * 1024u * 1024u;
 
 }  // namespace
