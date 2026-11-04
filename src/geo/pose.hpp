@@ -2,8 +2,7 @@
 
 // The camera's extrinsics: where the lens is and which way it points.
 //
-// Four frames are involved, and mixing them up is the classic way to get a
-// geolocation that is plausible but wrong, so they are spelled out here:
+// Four frames, mixed up easily and silently if not spelled out:
 //
 //   ENU     world frame: +x east, +y north, +z up. Everything renders here.
 //   NED     navigation frame: +x north, +y east, +z down. Yaw/pitch/roll are
@@ -43,8 +42,7 @@ struct GimbalAngles {
     // Pan relative to the nose: 0 = straight ahead, positive to the right.
     double pan_deg = 0.0;
     // Tilt below the airframe's horizontal: 0 = forward, 90 = straight down
-    // (nadir). Positive down, because that is the direction a UAV camera
-    // actually points and a negative-is-down convention invites sign errors.
+    // (nadir), positive down.
     double tilt_deg = 90.0;
     double roll_deg = 0.0;
 };
@@ -57,9 +55,7 @@ struct UavState {
     GimbalAngles gimbal;
 
     // Lens offset from the GPS antenna, in the body frame (metres, +x nose,
-    // +y right, +z down). Small, but it is the difference between a correct
-    // model and one that is quietly off by the length of the airframe, and
-    // the point of a prototype is to have the term there before it matters.
+    // +y right, +z down).
     glm::dvec3 camera_offset_body{0.0, 0.0, 0.2};
 };
 
@@ -86,10 +82,8 @@ glm::dvec3 cameraPositionEnu(const UavState& state, const EnuFrame& frame);
 // the image looks. Convenience for HUD readouts and for aiming the gimbal.
 glm::dvec3 boresightEnu(const UavState& state);
 
-// Gimbal pan/tilt that points the boresight along a given ENU direction,
-// given the aircraft's current attitude. This is how "look at that spot on
-// the ground" becomes gimbal angles; it is the inverse of the chain above,
-// and the simulated flight uses it to track a target.
+// Gimbal pan/tilt that points the boresight along a given ENU direction, at
+// the aircraft's current attitude. Inverse of the chain above.
 GimbalAngles aimGimbalAlong(const Attitude& attitude, const glm::dvec3& direction_enu,
                             double keep_roll_deg = 0.0);
 

@@ -56,9 +56,8 @@ bool GeoidModel::loadGrid(const std::string& path, GeoidModel& out, std::string&
         error = path + ": truncated header";
         return false;
     }
-    // Two posts minimum in each direction, or the interpolation below has no
-    // cell to work in; and a sanity cap so a corrupt header cannot ask for a
-    // terabyte of memory.
+    // At least 2x2 for the interpolation below, capped so a corrupt header
+    // cannot allocate a terabyte.
     if (rows < 2 || cols < 2 || rows > 100000 || cols > 100000) {
         error = path + ": implausible grid size";
         return false;
@@ -87,10 +86,9 @@ bool GeoidModel::loadGrid(const std::string& path, GeoidModel& out, std::string&
 double GeoidModel::separationAt(double lat_deg, double lon_deg) const {
     if (!gridded_) return constant_m_;
 
-    // Clamp rather than extrapolate. A geoid grid is normally global, so
-    // falling off it means the caller asked for somewhere impossible; the
-    // edge value is a far better answer than a linear extrapolation of a
-    // surface that is not linear.
+    // Clamp rather than extrapolate: a global grid should never be asked for
+    // somewhere off it, and the edge value beats extrapolating a non-linear
+    // surface.
     const double lat = std::clamp(lat_deg, lat_min_, lat_max_);
     const double lon = std::clamp(lon_deg, lon_min_, lon_max_);
 

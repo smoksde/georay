@@ -2,12 +2,10 @@
 
 // WGS84 geodetic <-> ECEF <-> local ENU conversions.
 //
-// Everything in this file is double precision and stays double precision.
-// Single precision has ~7 significant digits, and an ECEF coordinate is
-// ~6.4e6 metres, so a float ECEF value quantises to roughly half a metre -
-// larger than the geolocation error this tool exists to study. Floats appear
-// only where coordinates are handed to OpenGL, and only after they have been
-// made local (ENU) so the magnitudes are small.
+// Double precision throughout. Single precision's ~7 significant digits on
+// an ECEF coordinate (~6.4e6 m) quantises to roughly half a metre - larger
+// than the error this tool studies. Floats appear only where coordinates go
+// to OpenGL, and only after being made local (ENU) so magnitudes are small.
 
 #include <glm/glm.hpp>
 
@@ -42,12 +40,10 @@ glm::dvec3 geodeticToEcef(const Geodetic& g);
 // naive fixed-point iteration, needs no convergence loop or iteration cap.
 Geodetic ecefToGeodetic(const glm::dvec3& ecef);
 
-// A local tangent-plane frame: east, north, up in metres from an origin.
-//
-// The whole simulation runs in one of these. A UAV scene spans a few
-// kilometres at most, where the difference between the tangent plane and the
-// curved ellipsoid is centimetres, so working locally costs nothing and buys
-// coordinates small enough to render and to reason about.
+// A local tangent-plane frame: east, north, up in metres from an origin. The
+// whole simulation runs in one - over a few km the tangent plane and the
+// curved ellipsoid differ by centimetres, so working locally is free and
+// gives coordinates small enough to render.
 class EnuFrame {
 public:
     EnuFrame() = default;
@@ -70,10 +66,9 @@ private:
     glm::dmat3 ecef_from_enu_{1.0};
 };
 
-// Great-circle-ish horizontal distance between two geodetic points, computed
-// through the local ENU frame of the first. Only meaningful at the scales
-// this tool works at (kilometres), which is all it is used for - reporting
-// how far a geolocated pixel is from the aircraft.
+// Great-circle-ish horizontal distance, via the local ENU frame of the
+// first point. Meaningful only at this tool's scale (kilometres) - used to
+// report how far a geolocated pixel is from the aircraft.
 double horizontalDistance(const Geodetic& a, const Geodetic& b);
 
 inline double deg2rad(double d) { return d * (3.14159265358979323846 / 180.0); }

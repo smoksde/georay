@@ -2,30 +2,27 @@
 
 // Real elevation data: SRTM-style .hgt tiles read straight off disk.
 //
-// The .hgt format is the reason real terrain costs this project nothing. It
-// has no header whatsoever - the file is a square array of big-endian signed
-// 16-bit metres, and every other fact about it comes from the filename and
-// the file length:
+// .hgt has no header: the file is a square array of big-endian signed 16-bit
+// metres, and everything else comes from the filename and the file length:
 //
 //   N48E011.hgt   the south-west corner, in whole degrees
 //   25,934,402 B  = 3601 x 3601 x 2, so 1 arc-second posting (SRTM1, ~30 m)
 //    2,884,802 B  = 1201 x 1201 x 2, so 3 arc-second posting (SRTM3, ~90 m)
 //
-// Row 0 is the NORTHERN edge and column 0 the western one, so the array runs
-// top-left to bottom-right exactly as the tile would be drawn on a map -
-// which is the opposite of the south-to-north order the filename suggests,
-// and the single easiest thing to get backwards.
+// Row 0 is the NORTHERN edge, column 0 the western one - top-left to
+// bottom-right as the tile would be drawn, the opposite of what the
+// filename's south-to-north naming suggests, and the easiest thing to get
+// backwards.
 //
 // Each tile spans a full degree inclusive of both edges, so neighbouring
-// tiles share a row or column of posts. That redundancy is what lets a
-// position on a tile boundary be sampled from either tile and give the same
-// answer, and sampleOrthometric() relies on it.
+// tiles share a row or column of posts - which is what lets a position on a
+// tile boundary be sampled from either tile and agree; sampleOrthometric()
+// relies on it.
 //
-// Heights are orthometric (above the EGM96 geoid). Converting them for use
-// in georay's ellipsoidal world is the GeoidModel's job - see geoid.hpp.
-//
-// Nothing here touches the network. Tiles are fetched by
-// scripts/fetch_dem.py, deliberately, into a directory this reads.
+// Heights are orthometric (above the EGM96 geoid); GeoidModel (geoid.hpp)
+// converts them into georay's ellipsoidal world. Nothing here touches the
+// network - tiles are fetched by scripts/fetch_dem.py into a directory this
+// reads.
 
 #include <cstdint>
 #include <map>
@@ -37,9 +34,8 @@ namespace georay {
 // A single .hgt tile held in memory.
 class HgtTile {
 public:
-    // SRTM's void marker. Real gaps exist - steep terrain and water bodies
-    // defeat the radar - and a void read as -32768 metres would punch a hole
-    // 32 km deep through the terrain.
+    // SRTM's void marker (steep terrain and water defeat the radar). Read as
+    // a height instead of excluded, it punches a 32 km hole in the terrain.
     static constexpr int16_t kVoid = -32768;
 
     static bool load(const std::string& path, HgtTile& out, std::string& error);
@@ -53,10 +49,9 @@ public:
 
     bool contains(double lat_deg, double lon_deg) const;
 
-    // Bilinearly interpolated orthometric height. Returns false where the
-    // position is off the tile, or where every surrounding post is a void -
-    // which is a different thing from a height of zero, and must not be
-    // allowed to become one.
+    // Bilinearly interpolated orthometric height. False when off the tile,
+    // or every surrounding post is a void - not the same as a height of
+    // zero.
     bool sample(double lat_deg, double lon_deg, double& height_m) const;
 
     // Raw post, row 0 north. Out-of-range indices return kVoid.
@@ -75,22 +70,14 @@ private:
     std::vector<int16_t> samples_;
 };
 
-// A directory of tiles, loaded as they are needed and evicted when too many
-// accumulate.
-//
-// Lazy rather than eager because a scene's extent rarely lines up with the
-// degree grid: a 6 km square near a corner touches four tiles, and loading a
-// whole continent's worth up front to find that out would be absurd.
-//
-// Bounded because the aircraft travels. A one-degree SRTM1 tile is 26 MB in
-// memory, so a cache that only ever grows is not a streaming cache - it is a
-// slow way to load the whole dataset. A flight across a region touches tiles
-// it will not come back to, and those have to go.
+// A directory of tiles, loaded lazily as needed (a scene rarely lines up
+// with the degree grid - a corner touches four tiles) and evicted when too
+// many accumulate (a one-degree SRTM1 tile is 26 MB; an unbounded cache is
+// just a slow way to load the whole dataset as the aircraft travels).
 class DemSource {
 public:
-    // Eight tiles is 207 MB and comfortably more than any single terrain
-    // window needs - a 40 km window straddling a degree corner touches four -
-    // so the working set never thrashes against the limit.
+    // 207 MB, comfortably more than any single terrain window needs (a 40 km
+    // window straddling a degree corner touches four).
     static constexpr size_t kDefaultTileLimit = 8;
 
     explicit DemSource(std::string directory, size_t tile_limit = kDefaultTileLimit)
@@ -108,9 +95,8 @@ public:
     const std::string& directory() const { return directory_; }
     // Names of the tiles actually used so far, in load order.
     std::vector<std::string> loadedTiles() const;
-    // Tiles that were asked for and are not on disk. Reported rather than
-    // silently treated as sea, because missing coverage is a gap in the
-    // answer, not an answer.
+    // Tiles asked for and absent - reported rather than treated as sea,
+    // since missing coverage is a gap in the answer, not an answer.
     std::vector<std::string> missingTiles() const;
     const std::string& lastError() const { return last_error_; }
 

@@ -2,19 +2,13 @@
 
 // Web Mercator, and a geographic box expressed in it.
 //
-// This exists so that texture coordinates stop depending on which tiles a map
-// happens to be made of. A box is defined by its geographic bounds; the UV of
-// a position inside it is a function of those bounds alone. Change the zoom
-// the box is filled at - a different tile grid, a different pixel count - and
-// every UV stays exactly where it was.
+// A box is defined by its geographic bounds; a position's UV inside it is a
+// function of those bounds alone, independent of the zoom the box happens
+// to be filled at. That is what lets the terrain mesh bake UVs once and the
+// texture underneath be re-stitched at any resolution.
 //
-// That is what makes zoom-matched detail possible without rebuilding the
-// terrain mesh: the mesh bakes UVs once, and the texture underneath can be
-// re-stitched at any resolution.
-//
-// Web Mercator's y axis is not linear in latitude, and at the scales georay
-// works at that matters: interpolating latitude instead misplaces the map by
-// over a metre across a 4 km scene.
+// Web Mercator's y axis is not linear in latitude - interpolating latitude
+// instead misplaces the map by over a metre across a 4 km scene.
 
 #include <glm/glm.hpp>
 
@@ -31,28 +25,19 @@ double mercatorLongitude(double tile_x, int zoom);
 // Ground resolution of one pixel of a 256-pixel tile at this zoom.
 double mercatorMetresPerPixel(double lat_deg, int zoom);
 
-// The zoom whose native tile resolution is closest to - and no coarser than -
-// a wanted ground resolution. Clamped to [min_zoom, max_zoom], because a
-// source that has no tiles past z15 cannot be asked for z19 however much
-// detail the view would like.
+// Rounds up: the zoom no coarser than a wanted ground resolution, clamped to
+// [min_zoom, max_zoom] since a source with no tiles past z15 cannot give z19.
 int zoomForResolution(double lat_deg, double metres_per_pixel, int min_zoom, int max_zoom);
 
-// The finest zoom whose native resolution is still no finer than a limit -
-// the opposite rounding to zoomForResolution.
-//
-// Needed because a stitched texture has a fixed pixel budget. Picking a zoom
-// finer than that budget downloads tiles only to average them away: at a
-// 4096-pixel cap over a 40 km box, one step too fine is four times the tiles
-// for a picture that ends up identical.
+// Rounds down: the finest zoom still no finer than a limit. For a stitched
+// texture with a fixed pixel budget - one step too fine at a 4096-pixel cap
+// over 40 km is four times the tiles for a picture that ends up identical.
 int zoomNotFinerThan(double lat_deg, double metres_per_pixel, int min_zoom, int max_zoom);
 
-// The zoom whose native resolution is closest to a wanted one, rounding
-// either way.
-//
-// For streamed chunks this is the right rounding and the other two are not.
-// Rounding up is a whole extra zoom level - four times the tiles - to be
-// twice as sharp as the screen can show; rounding down is visibly soft. The
-// nearest level is within a factor of 1.4 either way, which is invisible.
+// Rounds to nearest. The right choice for streamed chunks, where the other
+// two are not: rounding up is four times the tiles to be twice as sharp as
+// the screen shows; rounding down is visibly soft. Nearest is within a
+// factor of 1.4 either way - invisible.
 int zoomNearest(double lat_deg, double metres_per_pixel, int min_zoom, int max_zoom);
 
 // A geographic box, held in Mercator so that interpolation inside it is
@@ -60,9 +45,8 @@ int zoomNearest(double lat_deg, double metres_per_pixel, int min_zoom, int max_z
 class MercatorBox {
 public:
     MercatorBox() = default;
-    // Built from geographic bounds. `zoom` only fixes the units the internal
-    // tile coordinates are expressed in; it does not constrain what the box
-    // is later filled with.
+    // Built from geographic bounds; `zoom` only fixes the units the internal
+    // tile coordinates use, not what the box is later filled with.
     static MercatorBox fromBounds(double south_deg, double north_deg, double west_deg,
                                   double east_deg, int zoom = 20);
     // The box covering a square of `half_extent_m` around a position.
@@ -71,9 +55,8 @@ public:
 
     bool valid() const { return tile_width_ > 0.0 && tile_height_ > 0.0; }
 
-    // Texture coordinates: u west to east, v north to south, matching a
-    // raster whose first row is its northern edge. Outside 0..1 means outside
-    // the box, which callers may legitimately want to know.
+    // u west to east, v north to south, matching a raster whose first row is
+    // its northern edge. Outside 0..1 means outside the box.
     glm::dvec2 uvFor(double lat_deg, double lon_deg) const;
     bool contains(double lat_deg, double lon_deg) const;
 

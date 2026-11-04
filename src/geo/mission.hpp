@@ -62,9 +62,9 @@ struct Waypoint {
     double params[4] = {0, 0, 0, 0};
     bool autocontinue = true;
 
-    // Whether this item moves the aircraft somewhere. A mission is full of
-    // items that do not - camera triggers, speed changes, jumps - and
-    // treating one of those as a position flies to latitude 0, longitude 0.
+    // Whether this item moves the aircraft - a mission also has camera
+    // triggers, speed changes, jumps, and treating one as a position flies
+    // to latitude 0, longitude 0.
     bool isNavigation() const;
     // Short label for the HUD.
     const char* commandName() const;
@@ -82,9 +82,8 @@ struct Mission {
     std::vector<Waypoint> navigationItems() const;
 
     // The waypoint's position with its altitude resolved to a real
-    // ellipsoidal height, given the ground model. This is the function that
-    // turns "50" into a height above the ellipsoid, and it needs both the
-    // frame and the terrain to do it.
+    // ellipsoidal height - turns "50" into a height above the ellipsoid,
+    // which needs both the frame and the terrain.
     Geodetic resolveAltitude(const Waypoint& waypoint, const Terrain& terrain,
                              const EnuFrame& frame, double geoid_separation_m) const;
 

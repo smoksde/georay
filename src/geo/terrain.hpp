@@ -2,24 +2,19 @@
 
 // The ground model a camera ray gets intersected against.
 //
-// This is a regular grid of heights with bilinear interpolation between
-// posts - deliberately the same shape as a real DEM tile (SRTM, Copernicus,
-// a GeoTIFF), so swapping synthetic terrain for surveyed data means filling
-// the same array from a file and changing nothing else. The analytic
-// generator exists only to have something interesting to look at and to make
-// the parallax effects of real relief visible.
+// A regular grid of heights, bilinearly interpolated between posts -
+// deliberately the same shape as a real DEM tile (SRTM, Copernicus, a
+// GeoTIFF), so swapping synthetic terrain for surveyed data means filling
+// the same array from a file. The analytic generator exists only to give
+// synthetic relief something to show parallax against.
 //
-// Heights and positions are ENU metres, in the same local frame the rest of
-// the simulation uses - so a height of 0 is the frame origin's altitude, not
-// sea level. Rays are traced in ENU, so keeping the ground model there too
-// means the intersection never has to change frames mid-solve.
-//
-// Loading a real DEM therefore means pushing each post through
-// EnuFrame::fromGeodetic() rather than copying raw elevations in. That is
-// not busywork: it is what applies the tangent-plane curvature correction
-// (about 8 cm per kilometre from the origin, growing quadratically), and it
-// is where an orthometric DEM's geoid offset is added. loadFromDem() below
-// does exactly that.
+// Heights and positions are ENU metres: 0 is the frame origin's altitude,
+// not sea level. Loading a real DEM means pushing each post through
+// EnuFrame::fromGeodetic() rather than copying elevations in directly - that
+// is what applies the tangent-plane curvature correction (~8 cm/km from the
+// origin, growing quadratically) and adds the orthometric DEM's geoid
+// offset. loadFromDem() below does exactly that; a plain subtraction instead
+// would drop the curvature term and bake a dome into the terrain.
 
 #include <string>
 #include <vector>
@@ -41,9 +36,8 @@ struct RayHit {
     int steps = 0;          // marching steps used; a diagnostic, not a result
 
     // Set when the ray left the modelled area rather than missing the
-    // ground. The distinction matters: a ray that exits the DEM tile is an
-    // unknown, not an answer, and a tool that reports it as "no ground" will
-    // happily mislead you at the edge of coverage.
+    // ground - an unknown, not an answer, and conflating the two misleads at
+    // the edge of coverage.
     bool left_coverage = false;
 };
 
@@ -73,10 +67,8 @@ public:
     // data is in play.
     const std::string& sourceName() const { return source_name_; }
 
-    // How a DEM load went. Kept on the terrain rather than returned and
-    // forgotten, because "real elevation data" with a fifth of its posts
-    // invented is a different claim from the same terrain with none, and the
-    // user has to be able to see which they are looking at.
+    // How a DEM load went - a fifth of its posts invented is a different
+    // claim from none, and the user has to see which they're looking at.
     struct DemLoadReport {
         bool ok = false;
         int posts_total = 0;
@@ -94,15 +86,10 @@ public:
     };
 
     // Replace the heights with real elevation data, resampled onto this
-    // terrain's existing ENU grid.
-    //
-    // Resampling onto the ENU grid rather than adopting the DEM's own
-    // latitude/longitude grid is what keeps this change local: the ray
-    // marcher, the renderer and every existing test go on working on exactly
-    // the structure they already understand. It costs nothing in fidelity
-    // here either - at a few hundred posts across a few kilometres georay's
-    // grid is finer than SRTM's ~30 m posting, so this interpolates rather
-    // than decimates.
+    // terrain's existing ENU grid rather than the DEM's own lat/lon grid -
+    // so the ray marcher and renderer keep working on the structure they
+    // already understand. Costs nothing in fidelity: at a few hundred posts
+    // across a few km, georay's grid is finer than SRTM's ~30 m posting.
     DemLoadReport loadFromDem(const DemSource& dem, const GeoidModel& geoid,
                               const EnuFrame& frame);
 
@@ -113,14 +100,12 @@ public:
     glm::dvec3 sampleNormal(double east, double north) const;
     bool inCoverage(double east, double north) const;
 
-    // Intersect a ray (origin + t * direction, t >= 0) with the surface.
-    //
-    // Marches in steps and bisects the first sign change of (ray height -
-    // ground height). Ray marching rather than an analytic solve because a
-    // sampled heightfield has no analytic form - and bisection afterwards
-    // because the marching step has to be coarse enough to cross kilometres
-    // without thousands of samples, which on its own would quantise the hit
-    // to the step size.
+    // Intersect a ray (origin + t * direction, t >= 0) with the surface:
+    // marches in steps and bisects the first sign change of (ray height -
+    // ground height). Marching rather than an analytic solve because a
+    // sampled heightfield has none; bisection because a marching step coarse
+    // enough to cross kilometres without thousands of samples would
+    // otherwise quantise the hit to the step size.
     RayHit raycast(const glm::dvec3& origin, const glm::dvec3& direction,
                    double max_distance = 50000.0) const;
 
@@ -136,10 +121,8 @@ public:
 private:
     void updateExtrema();
 
-    // Replaces missing posts by diffusing their valid neighbours inwards.
-    // SRTM voids are usually small and surrounded by data, so a few passes
-    // close them; a post that is still missing afterwards sits in a hole too
-    // large to invent, and takes the mean of whatever data did load.
+    // Replaces missing posts by diffusing valid neighbours inwards; a post
+    // still missing after a few passes takes the mean of whatever loaded.
     int fillGaps(std::vector<bool>& has_data);
 
     Kind kind_ = Kind::Hills;

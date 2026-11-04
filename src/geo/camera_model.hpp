@@ -28,10 +28,9 @@ struct Distortion {
 
 class CameraModel {
 public:
-    // Build from physical sensor numbers, which is how a UAV payload is
-    // actually specified on a datasheet: focal length in mm, sensor width in
-    // mm, image size in pixels. Square pixels and a centred principal point
-    // are assumed; setIntrinsics() below overrides any of that.
+    // Build from datasheet numbers: focal length in mm, sensor width in mm,
+    // image size in pixels. Square pixels and a centred principal point are
+    // assumed; setIntrinsics() below overrides either.
     static CameraModel fromSensor(double focal_length_mm, double sensor_width_mm,
                                   int image_width, int image_height);
 
@@ -43,9 +42,8 @@ public:
     void setIntrinsics(double fx, double fy, double cx, double cy);
     void setImageSize(int width, int height);
 
-    // Rescale the focal length in terms of the horizontal field of view,
-    // which is the knob a user actually wants to turn ("zoom out to 90
-    // degrees") rather than a pixel focal length.
+    // The knob a user actually wants ("zoom out to 90 degrees"), rather than
+    // a pixel focal length.
     void setHorizontalFovDeg(double fov_deg);
     double horizontalFovDeg() const;
     double verticalFovDeg() const;
@@ -58,8 +56,8 @@ public:
     int imageHeight() const { return image_height_; }
     double aspectRatio() const { return double(image_width_) / double(image_height_); }
 
-    // Focal length in mm, assuming the sensor width this model was built
-    // with. Reported in the HUD; not used by any of the maths.
+    // Focal length in mm at the sensor width this model was built with.
+    // Reported in the HUD; not used by the maths.
     double focalLengthMm() const;
     double sensorWidthMm() const { return sensor_width_mm_; }
 
@@ -73,29 +71,27 @@ public:
     glm::dvec3 pixelToRay(const glm::dvec2& pixel) const;
 
     // Pixel a point in the optical frame lands on, with distortion applied.
-    // `in_front` reports whether the point was actually in front of the lens;
-    // a point behind it still yields a (meaningless) pixel, because the
+    // `in_front` reports whether it was actually in front of the lens; a
+    // point behind it still yields a (meaningless) pixel, since the
     // projection divides by z regardless of sign.
     glm::dvec2 projectToPixel(const glm::dvec3& point_optical, bool* in_front = nullptr) const;
 
     bool pixelInImage(const glm::dvec2& pixel) const;
 
-    // The four image corners, in the order TL, TR, BR, BL. Used to draw the
-    // camera frustum and to trace the ground footprint outline.
+    // The four image corners, TL/TR/BR/BL - for the camera frustum and the
+    // ground footprint outline.
     std::array<glm::dvec2, 4> imageCorners() const;
 
-    // OpenGL projection matrix equivalent to this pinhole model, for an eye
-    // space where the camera looks down -z (the GL convention). Lets the
-    // simulated camera view be rendered with exactly the intrinsics the
-    // geolocation maths uses, which is what makes clicking in that view a
+    // OpenGL projection matrix equivalent to this pinhole model (eye space
+    // looking down -z). Lets the simulated camera view render with the exact
+    // intrinsics the geolocation maths uses, so clicking in it is a
     // meaningful test rather than an approximation.
     glm::mat4 glProjectionMatrix(double near_m, double far_m) const;
 
 private:
-    // Tag for the one constructor that leaves the in-class member
-    // initialisers alone. fromSensor() needs to build a model without going
-    // through the default constructor, which is itself defined in terms of
-    // fromSensor() - without this, the two call each other forever.
+    // fromSensor() builds a model without going through the default
+    // constructor, which is itself defined via fromSensor() - without this
+    // tag the two would call each other forever.
     struct Uninitialised {};
     explicit CameraModel(Uninitialised) {}
 

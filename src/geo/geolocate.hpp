@@ -77,30 +77,23 @@ ProjectResult projectEnu(const UavState& state, const CameraModel& camera,
                          const EnuFrame& frame, const glm::dvec3& point_enu);
 
 // View matrix taking ENU world coordinates into the OpenGL eye space of the
-// simulated camera, for rendering the view that camera sees.
+// simulated camera. Lives here rather than in the renderer because, combined
+// with CameraModel::glProjectionMatrix(), it must put a world point on
+// exactly the pixel projectEnu() says it lands on - a numeric claim, tested
+// here without a GL context.
 //
-// It belongs here, next to the projection maths, rather than in the renderer:
-// combined with CameraModel::glProjectionMatrix() it has to put a world point
-// on exactly the pixel projectEnu() says it lands on, or the image a user
-// clicks in is not the image the geolocation is computed from. That is a
-// numeric claim, so it lives where it can be tested without a GL context.
-//
-// Note the one thing this cannot reproduce: lens distortion. A projection
-// matrix is linear and distortion is not, so the rendered view is always an
-// ideal pinhole image. With a distortion model active, the maths and the
-// render therefore disagree towards the frame edges - by precisely the
-// amount the distortion contributes.
+// Cannot reproduce lens distortion: a projection matrix is linear and
+// distortion is not, so with a distortion model active the render and the
+// maths disagree towards the frame edges by precisely the distortion's size.
 glm::mat4 glViewMatrix(const UavState& state, const EnuFrame& frame);
 
 // Ground footprint of the whole image: the terrain hits of the four image
-// corners, plus a densified outline for drawing. `samples_per_edge` controls
-// how finely each edge is traced - an oblique view's footprint is curved by
-// both perspective and relief, so a straight line between corners would be a
-// visible lie.
-// One traced point along the image border. Misses are kept in the list
-// rather than dropped: a consumer that only sees the hits cannot tell
-// adjacent samples from ones separated by a gap, and will happily draw a
-// straight line across the missing stretch as though it were an edge.
+// corners, plus a densified outline. `samples_per_edge` controls how finely
+// each edge is traced - an oblique view's footprint is curved by both
+// perspective and relief, so a straight line between corners would lie.
+// One traced point along the border. Misses stay in the list rather than
+// being dropped, so a consumer can tell adjacent samples from ones with a
+// gap between them instead of drawing a straight line across it.
 struct FootprintSample {
     bool valid = false;
     glm::dvec3 enu{0.0};
