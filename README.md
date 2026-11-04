@@ -55,17 +55,15 @@ and you get a coordinate you can paste into a map and check.
 ![georay](docs/screenshot-mission.png)
 
 *A QGroundControl survey plan over Berlin: the route with a plumb line from
-each waypoint to the ground, the simulated camera on the left, and the live
-feed pane waiting for a real stream on the right.*
+each waypoint to the ground, and the simulated camera's view in the corner.*
 
-The window has two camera panes. The left one is the simulated camera — that
-is the one you click in. The right one is a placeholder for an incoming stream
-from a real aircraft; it reads `NO SIGNAL` until there is something to put
-there. `TAB` moves focus between them, `V` enlarges the focused one.
+The simulated camera is the pane in the corner — that is the one you click
+in. `V` resizes it.
 
-`M` switches the ground between satellite imagery, a street map, and bare
-terrain. `scenes/` holds the rest — `berlin-mission` (a QGroundControl survey
-plan), `berlin`, `munich`, `zugspitze` — selected with `--scene NAME`:
+`M` switches the ground between satellite imagery, a drawn street map, and a
+flat height map with contour colouring. `scenes/` holds the rest —
+`berlin-mission` (a QGroundControl survey plan), `berlin`, `munich`,
+`zugspitze` — selected with `--scene NAME`:
 
 ```bash
 ./build/georay --scene zugspitze
@@ -85,9 +83,9 @@ Other modes:
 | `./build/georay --scene NAME` | Load `scenes/NAME.scene`. Later flags override it. |
 | `./build/georay --origin LAT,LON --extent M` | Where the scene is, and how big. |
 | `./build/georay --mission FILE` | Fly a `.plan` or `.waypoints` file. |
-| `./build/georay --map-mode street` | Start on the street map rather than imagery. |
-| `./build/georay --map-satellite-dir DIR` | Stream imagery windows by position. |
-| `./build/georay --map-street-dir DIR` | The same for the street-map layer. |
+| `./build/georay --map-mode map` | Start on the drawn street map rather than imagery. |
+| `./build/georay --map SOURCE` | Named tile source for the imagery layer. |
+| `./build/georay --street-map SOURCE` | The same for the street-map layer. |
 | `./build/georay --advance SECONDS` | Run the simulation forward before drawing. |
 
 ## Flight plans from QGroundControl and Pixhawk
@@ -340,8 +338,8 @@ georay runs on synthetic terrain out of the box, and on real SRTM elevation
 data when you give it some. Fetch tiles for an area:
 
 ```bash
-scripts/fetch_dem.py --origin 48.1375,11.5755 --extent 3000
-./build/georay --dem data/dem --origin 48.1375,11.5755 --extent 3000 --geoid-separation 47
+scripts/fetch_dem.py --origin 47.435,10.99 --extent 3000
+./build/georay --dem data/dem --origin 47.435,10.99 --extent 3000 --geoid-separation 48
 ```
 
 Press `0` for the real terrain and `1`–`4` for the synthetic generators, on the
@@ -352,9 +350,7 @@ the ground model actually changes an answer.
 
 *Real SRTM data over the Zugspitze massif (`--origin 47.435,10.99
 --geoid-separation 48`): two tiles across the 11°E seam, 2010 m of relief in a
-6 km box. The flat-earth error on the picked pixel is 59 m there, against 4 m
-over the Munich plain — which is the whole argument for terrain-aware
-geolocation in one number.*
+6 km box.*
 
 ### Verified against published elevations
 
@@ -450,8 +446,7 @@ continental distances.
 | `0` | Back to the real DEM terrain, if loaded |
 | `[` `]`, `,` `.`, `-` `=`, `;` `'` | Camera zoom, height AGL, ground speed, orbit radius |
 | `M`, `N` | Ground mode (map / satellite / height), dark ground |
-| `TAB`, `V` | Focus camera pane, enlarge it |
-| `D`, `F`, `X` | Lens distortion, footprint, flat-earth error |
+| `V`, `F` | Resize the camera pane, toggle the footprint |
 | `R`, `F12`, `H`, `Q` | Reset, screenshot, help, quit |
 
 ## How the geolocation works
@@ -493,9 +488,6 @@ determine whether a geolocation is worth anything:
   gimbal error, per degree of heading error, and per metre of altitude error.
   At a shallow depression angle a single degree is tens of metres, and no
   amount of GPS accuracy helps. This is the error budget, measured live.
-- **Flat-earth comparison** (`X`) — the same pixel geolocated against a flat
-  ground plane, with the horizontal distance between the two answers. On the
-  mountain terrain this routinely exceeds 100 m.
 
 ## Text
 
@@ -569,10 +561,10 @@ These are deliberate, and each is where a production pipeline would differ.
   ground *behind* it. That is left visible on purpose: it is the single largest
   error source in real oblique geolocation.
 - **The rendered view cannot show lens distortion.** A projection matrix is
-  linear. With distortion on (`D`), the maths models a distorted camera while
-  the picture stays an ideal pinhole render, so the two diverge towards the
-  frame edges — the HUD says so while it is active. Fixing it properly means
-  rendering to a texture and warping it.
+  linear, so the simulated camera's distortion stays off by default: with it
+  on, the maths would model a distorted camera while the picture stayed an
+  ideal pinhole render, and the two would diverge towards the frame edges.
+  Fixing that properly means rendering to a texture and warping it.
 - **SRTM is a 2000-vintage radar DSM at ~30 m posting**, with roughly 6 m
   vertical accuracy, and over forest and cities it measures the canopy and
   rooftops rather than the ground. A photogrammetry pipeline that cared would

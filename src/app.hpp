@@ -182,18 +182,13 @@ private:
 
     void renderWorldView();
     void renderSimulatedCamera();
-    void renderLiveCameraPlaceholder();
     void renderHud();
 
     // --- geometry helpers ------------------------------------------------
-    // There are two camera panes: the simulated view, and a placeholder for
-    // a live feed from a real aircraft. `index` selects which; the rectangle
-    // is in window pixels, y down from the top.
-    enum CameraPane { kSimulatedCamera = 0, kLiveCamera = 1, kCameraPanes = 2 };
-    glm::vec4 cameraRect(int index) const;
-    // Width of the bottom-left readout, which the camera panes must clear.
+    // The simulated camera's pane, in window pixels, y down from the top.
+    glm::vec4 cameraRect() const;
+    // Width of the bottom-left readout, which the camera pane must clear.
     float answerPanelWidth() const;
-    bool cameraPaneVisible(int index) const;
     // Window pixel -> camera image pixel. Returns false when the point is
     // outside the inset.
     bool windowToImagePixel(int x, int y, glm::dvec2& out) const;
@@ -257,11 +252,6 @@ private:
     const TileSource* map_sources_[2] = {nullptr, nullptr};
     Terrain::DemLoadReport dem_report_;
     bool using_dem_ = false;
-    // A flat ground model at the frame origin's elevation, used only to
-    // compute what a flat-earth geolocation would have said. Keeping it as a
-    // real Terrain rather than a special case means the comparison goes
-    // through exactly the same pipeline.
-    std::unique_ptr<Terrain> flat_reference_;
 
     CameraModel camera_;
     UavState uav_;
@@ -278,7 +268,6 @@ private:
     bool have_pick_ = false;
     glm::dvec2 pick_pixel_{0.0};
     GeolocateResult pick_result_;
-    GeolocateResult pick_flat_result_;  // the same pixel against flat ground
     // Round-trip residual for the picked pixel: geolocate, project the answer
     // back, and measure how far from the original pixel it lands. Shown in
     // the HUD because a pipeline that cannot reproduce its own input has no
@@ -293,7 +282,6 @@ private:
     bool paused_ = false;
     bool show_help_ = true;
     bool show_footprint_ = true;
-    bool show_flat_comparison_ = true;
     bool large_inset_ = false;
     // Darkens the ground so the bright overlays stay readable. On by
     // default: against a paper-white map zoomed out, they vanish.
@@ -301,8 +289,6 @@ private:
     // Which map layer is draped, or -1 for bare terrain. M cycles through
     // whichever layers actually loaded.
     GroundMode ground_mode_ = GroundMode::Satellite;
-    // Which camera pane V enlarges, and TAB switches.
-    int focused_camera_ = kSimulatedCamera;
     bool follow_aircraft_ = true;
     bool dragging_orbit_ = false;
     bool dragging_pan_ = false;

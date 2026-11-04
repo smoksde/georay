@@ -213,14 +213,9 @@ bool App::initialise(const Options& options) {
     // A payload in the class of a small UAV mapping camera: 1" sensor,
     // 1920x1080 video out, a mild wide angle.
     camera_ = CameraModel::fromSensor(12.0, 13.2, 1920, 1080);
-    // Distortion starts off, and that is a correctness decision rather than a
-    // simplification. The simulated view is drawn with a projection matrix,
-    // which is linear and so cannot render distortion; the geolocation maths
-    // applies it. With a distortion model active the two are therefore
-    // different cameras, and a pixel clicked in the rendered image is not the
-    // pixel the maths geolocates. Pressing D turns it on precisely to show
-    // that divergence - the HUD says so when it is active - but the default
-    // state is the one where what you see is what is computed.
+    // Off: the rendered view uses a linear projection matrix and cannot show
+    // distortion, so a distorted camera and the one on screen would disagree
+    // about which pixel a ray belongs to.
     camera_.distortion() = {};
 
     buildStructures();
@@ -254,11 +249,6 @@ bool App::buildWorld() {
     // default 6 km, finer than SRTM's 30 m posting, and a surface mesh of
     // around 260k triangles, which draws comfortably.
     terrain_ = std::make_unique<Terrain>(Terrain::Kind::Hills, options_.half_extent_m, 513, 0.0);
-    // The flat-earth reference deliberately spans far more than the scene:
-    // its whole job is to answer "where would a terrain-unaware system have
-    // put this", including for rays that leave the real terrain's coverage.
-    flat_reference_ =
-        std::make_unique<Terrain>(Terrain::Kind::Flat, options_.half_extent_m * 10.0, 17, 0.0);
 
     if (!options_.dem_directory.empty()) {
         dem_ = std::make_unique<DemSource>(options_.dem_directory);
@@ -666,9 +656,6 @@ void App::onKeyDown(const SDL_Keysym& key) {
         case SDLK_f:
             show_footprint_ = !show_footprint_;
             break;
-        case SDLK_x:
-            show_flat_comparison_ = !show_flat_comparison_;
-            break;
         case SDLK_v:
             large_inset_ = !large_inset_;
             break;
@@ -678,23 +665,8 @@ void App::onKeyDown(const SDL_Keysym& key) {
         case SDLK_n:
             dark_ground_ = !dark_ground_;
             break;
-        case SDLK_TAB:
-            // Which pane V enlarges. Only meaningful with two of them.
-            focused_camera_ = (focused_camera_ + 1) % kCameraPanes;
-            break;
         case SDLK_b:
             follow_aircraft_ = !follow_aircraft_;
-            break;
-
-        case SDLK_d:
-            // Toggling distortion is a live demonstration of how much the
-            // lens model is worth: at the frame edges it moves the answer by
-            // metres. See the comment in initialise() for why it starts off.
-            if (camera_.distortion().isIdentity()) {
-                camera_.distortion() = {-0.14, 0.035, -0.004, 0.0004, -0.0003};
-            } else {
-                camera_.distortion() = {};
-            }
             break;
 
         case SDLK_1:
@@ -846,47 +818,28 @@ float App::answerPanelWidth() const {
     return 60.0f * scene_->text().advance(TextRenderer::kNormal) + 30.0f;
 }
 
-bool App::cameraPaneVisible(int index) const {
-    // Enlarging one pane hides the other: two panes at half the window each
-    // would not fit, and overlapping them would hide the readouts.
-    return !large_inset_ || index == focused_camera_;
-}
-
-glm::vec4 App::cameraRect(int index) const {
+glm::vec4 App::cameraRect() const {
     const float margin = 16.0f;
-    const float gap = 10.0f;
     const float aspect = float(camera_.aspectRatio());
 
     float h = float(height_) * (large_inset_ ? 0.50f : 0.28f);
     float w = h * aspect;
 
-    // Never let the panes eat the window, and never let them run over the
-    // geolocation readout they share the bottom row with: on a narrow window
+    // Never let the pane eat the window, and never let it run over the
+    // geolocation readout it shares the bottom row with: on a narrow window
     // the width is the binding constraint, not the height.
-    const int panes = large_inset_ ? 1 : kCameraPanes;
-    const float available = float(width_) - answerPanelWidth() - 2.0f * margin -
-                            gap * float(panes);
-    if (w * float(panes) > available) {
-        w = available / float(panes);
+    const float available = float(width_) - answerPanelWidth() - 2.0f * margin;
+    if (w > available) {
+        w = available;
         h = w / aspect;
     }
 
     const float y = float(height_) - h - margin;
-    if (large_inset_) return glm::vec4(float(width_) - w - margin, y, w, h);
-
-    // Right-aligned, simulated camera to the left of the live one, so the
-    // pane you interact with sits next to the readouts it drives.
-    const float right_x = float(width_) - w - margin;
-    const float x = (index == kLiveCamera) ? right_x : right_x - w - gap;
-    return glm::vec4(x, y, w, h);
+    return glm::vec4(float(width_) - w - margin, y, w, h);
 }
 
 bool App::windowToImagePixel(int x, int y, glm::dvec2& out) const {
-    // Only the simulated pane maps to camera pixels. The live pane shows
-    // footage from a real aircraft whose pose georay does not know, so a
-    // click there has no ray to trace - see renderLiveCameraPlaceholder().
-    if (!cameraPaneVisible(kSimulatedCamera)) return false;
-    const glm::vec4 rect = cameraRect(kSimulatedCamera);
+    const glm::vec4 rect = cameraRect();
     if (x < rect.x || x > rect.x + rect.z || y < rect.y || y > rect.y + rect.w) return false;
     out.x = double(x - rect.x) / double(rect.z) * double(camera_.imageWidth());
     out.y = double(y - rect.y) / double(rect.w) * double(camera_.imageHeight());
@@ -899,10 +852,6 @@ void App::pickPixel(const glm::dvec2& image_pixel) {
     have_pick_ = true;
     pick_pixel_ = image_pixel;
     pick_result_ = geolocatePixel(uav_, camera_, *terrain_, frame_, image_pixel);
-
-    // What the same pixel would have given on the flat-earth assumption, for
-    // the error readout.
-    pick_flat_result_ = geolocatePixel(uav_, camera_, *flat_reference_, frame_, image_pixel);
 
     if (!pick_result_.valid) {
         pick_reprojection_px_ = 0.0;
@@ -1010,7 +959,7 @@ void App::render() {
     glCullFace(GL_BACK);
 
     renderWorldView();
-    if (cameraPaneVisible(kSimulatedCamera)) renderSimulatedCamera();
+    renderSimulatedCamera();
     renderHud();
 
     SDL_GL_SwapWindow(window_);
@@ -1063,19 +1012,7 @@ void App::renderWorldView() {
     }
 
     if (hover_valid_) scene_->addPickRay(hover_result_, *terrain_, 2500.0, 25.0 * glyph);
-    if (have_pick_) {
-        scene_->addPickRay(pick_result_, *terrain_, 2500.0, 25.0 * glyph);
-        if (show_flat_comparison_ && pick_result_.valid && pick_flat_result_.valid) {
-            // The flat-earth answer, and a line joining it to the real one.
-            // The length of that line is the error a terrain-unaware system
-            // would have made, drawn at the scale it actually happens.
-            scene_->addGroundMarker(pick_flat_result_.ground_enu,
-                                    glm::vec4(0.95f, 0.35f, 0.45f, 1.0f), 18.0 * glyph);
-            lines.addSegment(toFloat(pick_result_.ground_enu),
-                             toFloat(pick_flat_result_.ground_enu),
-                             glm::vec4(0.95f, 0.35f, 0.45f, 0.9f));
-        }
-    }
+    if (have_pick_) scene_->addPickRay(pick_result_, *terrain_, 2500.0, 25.0 * glyph);
 
     // The gimbal's tracking target, so it is clear what the camera is locked
     // onto even when the boresight is off the bottom of the frustum.
@@ -1089,7 +1026,7 @@ void App::renderWorldView() {
 }
 
 void App::renderSimulatedCamera() {
-    const glm::vec4 rect = cameraRect(kSimulatedCamera);
+    const glm::vec4 rect = cameraRect();
     // GL's viewport origin is the bottom-left of the window; the rect is in
     // top-left pixel coordinates.
     const GLint gl_x = GLint(rect.x);
@@ -1210,7 +1147,7 @@ void App::renderHud() {
     // ---- platform and camera state ------------------------------------
     {
         const float w = column_w;
-        const float h = 19.0f * line_h + 2.0f * pad;
+        const float h = 18.0f * line_h + 2.0f * pad;
         panel(pad, column_y, w, h);
         Cursor c{text, pad * 2.0f, column_y + pad, s, line_h};
 
@@ -1248,16 +1185,6 @@ void App::renderHud() {
         c.row("FX FY CX CY", num(camera_.fx(), 0) + " " + num(camera_.fy(), 0) + " " +
                                  num(camera_.cx(), 0) + " " + num(camera_.cy(), 0),
               colours::text_dim);
-        if (camera_.distortion().isIdentity()) {
-            c.row("DISTORTION", "OFF - VIEW MATCHES MATHS", colours::text_dim);
-        } else {
-            // Not a decoration: with distortion on, the rendered image is
-            // still an ideal pinhole projection, so clicking near a frame
-            // edge geolocates a slightly different ray than the one the
-            // picture shows. Saying so is the difference between a
-            // demonstration and a trap.
-            c.row("DISTORTION", "ON - VIEW IS UNDISTORTED", colours::text_warn);
-        }
         column_y += h + pad;
     }
 
@@ -1407,77 +1334,14 @@ void App::renderHud() {
                           colours::text_value);
                 right.row("D/ALTITUDE", num(sensitivity_alt_m_per_m_, 2) + " M PER M",
                           colours::text_value);
-
-                // The flat-earth comparison belongs with the pixel it is
-                // about, not in a panel of its own - there is nowhere left
-                // for one once there are two camera panes.
-                if (show_flat_comparison_ && pick_flat_result_.valid) {
-                    right.blank();
-                    const double error =
-                        glm::length(glm::dvec2(pick_result_.ground_enu) -
-                                    glm::dvec2(pick_flat_result_.ground_enu));
-                    right.row("FLAT-EARTH", formatDistance(error) + " OFF",
-                              error > 5.0 ? colours::text_warn : colours::text_good);
-                    right.row("  ITS ELEV",
-                              num(pick_flat_result_.ground_geodetic.altitude_m, 1) + " M VS " +
-                                  num(pick_result_.ground_geodetic.altitude_m, 1),
-                              colours::text_dim);
-                }
             }
         }
     }
 
-    // ---- the live-feed pane --------------------------------------------
-    //
-    // Deliberately empty. It is where footage from a real aircraft will go,
-    // and an empty pane that says so is more honest than one showing the
-    // simulation twice - which would make it impossible to tell, at a
-    // glance, which picture is real.
-    if (cameraPaneVisible(kLiveCamera)) {
-        const glm::vec4 rect = cameraRect(kLiveCamera);
-        fills.addQuad({rect.x, rect.y}, {rect.z, rect.w},
-                      glm::vec4(0.055f, 0.065f, 0.08f, 1.0f));
-
-        const glm::vec4 edge = focused_camera_ == kLiveCamera ? colours::text_label
-                                                              : colours::panel_edge;
-        edgeRect(rect.x, rect.y, rect.z, rect.w, edge);
-
-        // Corner brackets, so an empty pane still reads as a video frame
-        // rather than as a hole in the interface.
-        const float bracket = std::min(rect.z, rect.w) * 0.09f;
-        const glm::vec4 faint(0.30f, 0.36f, 0.42f, 1.0f);
-        const float x0 = rect.x + 8.0f, y0 = rect.y + 8.0f;
-        const float x1 = rect.x + rect.z - 8.0f, y1 = rect.y + rect.w - 8.0f;
-        lines.addSegment({x0, y0, 0}, {x0 + bracket, y0, 0}, faint);
-        lines.addSegment({x0, y0, 0}, {x0, y0 + bracket, 0}, faint);
-        lines.addSegment({x1, y0, 0}, {x1 - bracket, y0, 0}, faint);
-        lines.addSegment({x1, y0, 0}, {x1, y0 + bracket, 0}, faint);
-        lines.addSegment({x0, y1, 0}, {x0 + bracket, y1, 0}, faint);
-        lines.addSegment({x0, y1, 0}, {x0, y1 - bracket, 0}, faint);
-        lines.addSegment({x1, y1, 0}, {x1 - bracket, y1, 0}, faint);
-        lines.addSegment({x1, y1, 0}, {x1, y1 - bracket, 0}, faint);
-
-        const std::string title = "LIVE FEED";
-        const std::string status = "NO SIGNAL";
-        const std::string note = "AWAITING STREAM FROM AIRCRAFT";
-        text.add(title, {rect.x + 8.0f, rect.y + 8.0f}, s, colours::text_dim);
-        const int big = TextRenderer::kLarge;
-        text.add(status,
-                 {rect.x + (rect.z - text.textWidth(status, big)) * 0.5f,
-                  rect.y + rect.w * 0.5f - text.lineHeight(big) * 0.5f},
-                 big, colours::text_warn);
-        text.add(note,
-                 {rect.x + (rect.z - text.textWidth(note, TextRenderer::kSmall)) * 0.5f,
-                  rect.y + rect.w * 0.5f + line_h * 1.4f},
-                 TextRenderer::kSmall, colours::text_dim);
-    }
-
     // ---- the simulated camera's frame and reticle ----------------------
-    if (cameraPaneVisible(kSimulatedCamera)) {
-        const glm::vec4 rect = cameraRect(kSimulatedCamera);
-        const glm::vec4 edge = focused_camera_ == kSimulatedCamera ? colours::text_label
-                                                                   : colours::panel_edge;
-        edgeRect(rect.x, rect.y, rect.z, rect.w, edge);
+    {
+        const glm::vec4 rect = cameraRect();
+        edgeRect(rect.x, rect.y, rect.z, rect.w, colours::panel_edge);
 
         // The principal point, which is where the boresight lands - not
         // necessarily the middle of the frame, and drawing it at the middle
@@ -1536,11 +1400,11 @@ void App::renderHud() {
             const std::string credit = credit_source->attribution;
             const float credit_h = text.lineHeight(TextRenderer::kSmall);
             const float width = text.textWidth(credit, TextRenderer::kSmall) + 10.0f;
-            // Just above the camera panes rather than along the bottom edge,
-            // where it was being clipped by the window and overlapped by the
-            // live pane. A credit line that cannot be read credits nobody.
+            // Just above the camera pane rather than along the bottom edge,
+            // where it was being clipped by the window. A credit line that
+            // cannot be read credits nobody.
             const float x = float(width_) - width - 16.0f;
-            const float y = cameraRect(kLiveCamera).y - credit_h - 6.0f;
+            const float y = rect.y - credit_h - 6.0f;
             fills.addQuad({x - 3.0f, y - 3.0f}, {width + 6.0f, credit_h + 6.0f},
                           glm::vec4(0.04f, 0.06f, 0.09f, 0.75f));
             text.add(credit, {x + 2.0f, y}, TextRenderer::kSmall, colours::text_dim);
@@ -1572,13 +1436,10 @@ void App::renderHud() {
             "- =                  GROUND SPEED",
             "; '                  ORBIT RADIUS",
             "",
-            "D                    LENS DISTORTION",
             "F                    FOOTPRINT",
-            "X                    FLAT-EARTH ERROR",
             "V                    CAMERA VIEW SIZE",
             "M                    MAP / SATELLITE / HEIGHT",
             "N                    DARK GROUND",
-            "TAB                  FOCUS CAMERA PANE",
             "R                    RESET",
             "F12                  SCREENSHOT",
             "Q / ESC              QUIT",
@@ -1661,7 +1522,7 @@ int App::run() {
     // inset and a pixel is picked, so the captured frame exercises the
     // geolocation path rather than just the empty HUD.
     if (!options_.screenshot_path.empty()) {
-        const glm::vec4 rect = cameraRect(kSimulatedCamera);
+        const glm::vec4 rect = cameraRect();
         glm::dvec2 image_pixel;
         if (windowToImagePixel(int(rect.x + rect.z * 0.42f), int(rect.y + rect.w * 0.62f),
                                image_pixel)) {
