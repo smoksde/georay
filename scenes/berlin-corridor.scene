@@ -1,0 +1,24 @@
+# A QGC survey over Berlin with the imagery streamed from a corridor.
+#
+# The difference from berlin-mission is where the imagery comes from: a
+# directory of overlapping windows fetched along the route, rather than one
+# fixed raster. The ENU frame re-anchors to the aircraft as it flies and the
+# resident window follows it, so the flight is not limited to the patch of
+# ground the scene started on.
+#
+# Fetch it with:
+#   scripts/fetch_dem.py --origin 52.5163,13.3777 --extent 2000
+#   scripts/fetch_map.py --along missions/berlin-survey.plan --window 900 \
+#       --zoom 17 --source esri --max-tiles 400 --out-dir data/windows
+
+name              BERLIN - STREAMED CORRIDOR
+origin            52.5163,13.3777
+# Matched to the corridor windows, so the whole terrain window has imagery
+# on it rather than trailing off into bare elevation tint at the edges.
+extent            900
+
+dem               data/dem
+map-satellite-dir data/windows
+geoid-separation  39.5
+
+mission           missions/berlin-survey.plan

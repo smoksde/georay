@@ -87,6 +87,7 @@ public:
     // untextured terrain, indistinguishable from a missing file.
     bool setMapRaster(int layer, const MapRaster& map);
     void clearMapRasters();
+    void clearMapLayer(int layer);
     bool hasMap(int layer) const {
         return layer >= 0 && layer < kMapLayers && map_textures_[layer] != 0;
     }

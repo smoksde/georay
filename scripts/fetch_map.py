@@ -35,6 +35,8 @@ requires an account and their own terms.
 
 import argparse
 import hashlib
+import io
+import json
 import math
 import os
 import struct
@@ -126,59 +128,26 @@ def fetch_tile(url_template, zoom, x, y, cache_dir):
     return data, False
 
 
-def main():
-    parser = argparse.ArgumentParser(description=__doc__,
-                                     formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--origin", default="52.5163,13.3777",
-                        help="scene centre as LAT,LON. For negative values use --origin=-33.9,18.4")
-    parser.add_argument("--extent", type=float, default=2000.0,
-                        help="half-extent of the scene in metres")
-    parser.add_argument("--zoom", type=int, default=16,
-                        help="tile zoom level (default 16, about 1.5 m per pixel at mid latitudes)")
-    parser.add_argument("--out", default="data/map.bin", help="raster to write")
-    parser.add_argument("--source", choices=sorted(SOURCES), default="osm",
-                        help="named tile source: osm (street map) or esri (satellite imagery)")
-    parser.add_argument("--url", help="XYZ tile URL template, overriding --source")
-    parser.add_argument("--max-pixels", type=int, default=4096,
-                        help="downsample the stitched raster to at most this on its longest "
-                             "side (default 4096). Caps file size and stays inside the GPU's "
-                             "texture limit.")
-    parser.add_argument("--attribution",
-                        help="credit line georay displays while the map is shown; "
-                             "defaults to the one the chosen --source requires")
-    parser.add_argument("--cache", default="data/tiles", help="per-tile download cache")
-    parser.add_argument("--max-tiles", type=int, default=250,
-                        help="refuse runs larger than this (OSM treats 250+ as bulk)")
-    parser.add_argument("--delay", type=float, default=0.12,
-                        help="seconds between requests, to stay a polite client")
-    parser.add_argument("--dry-run", action="store_true")
-    args = parser.parse_args()
+def fetch_window(lat, lon, extent, zoom, url, attribution_text, cache_dir,
+                 max_tiles, delay, max_pixels, out_path, dry_run=False, quiet=False):
+    """Fetch one square window and write it as a georay .map raster.
 
-    # A source carries its own attribution. Overriding the URL without saying
-    # who to credit would silently keep the previous source's credit line,
-    # which is worse than no credit at all.
-    source_url, source_attribution = SOURCES[args.source]
-    url = args.url or source_url
-    attribution_text = args.attribution or (source_attribution if not args.url
-                                            else "UNKNOWN TILE SOURCE")
+    Returns the number of tiles actually downloaded, or -1 if the window was
+    refused or produced nothing.
+    """
+    def say(*parts):
+        if not quiet:
+            print(*parts)
 
-    try:
-        lat_text, lon_text = args.origin.split(",")
-        lat, lon = float(lat_text), float(lon_text)
-    except ValueError:
-        raise SystemExit("--origin wants LAT,LON")
-    if not 1 <= args.zoom <= 19:
-        raise SystemExit("--zoom must be between 1 and 19")
-
-    # Scene bounds. Longitude degrees shrink towards the poles, hence the
-    # cosine; the guard keeps a polar scene from asking for the whole world.
-    d_lat = args.extent / 110574.0
-    d_lon = args.extent / max(111320.0 * math.cos(math.radians(lat)), 1.0)
+    # Window bounds. Longitude degrees shrink towards the poles, hence the
+    # cosine; the guard keeps a polar window from asking for the whole world.
+    d_lat = extent / 110574.0
+    d_lon = extent / max(111320.0 * math.cos(math.radians(lat)), 1.0)
 
     # North-west and south-east corners, in fractional tile space. Note y
     # grows southwards, so the northern edge gives the smaller y.
-    x_nw, y_nw = deg2tile(lat + d_lat, lon - d_lon, args.zoom)
-    x_se, y_se = deg2tile(lat - d_lat, lon + d_lon, args.zoom)
+    x_nw, y_nw = deg2tile(lat + d_lat, lon - d_lon, zoom)
+    x_se, y_se = deg2tile(lat - d_lat, lon + d_lon, zoom)
 
     tile_x0, tile_y0 = int(math.floor(x_nw)), int(math.floor(y_nw))
     tile_x1, tile_y1 = int(math.floor(x_se)), int(math.floor(y_se))
@@ -187,54 +156,50 @@ def main():
     total = tiles_x * tiles_y
 
     width, height = tiles_x * TILE_PIXELS, tiles_y * TILE_PIXELS
-    print("scene %.5f,%.5f +/- %.0f m at zoom %d" % (lat, lon, args.extent, args.zoom))
-    print("  %d x %d tiles = %d, raster %d x %d, %.1f MB on disk"
-          % (tiles_x, tiles_y, total, width, height, width * height * 3 / 1e6))
-    native_resolution = metres_per_pixel(lat, args.zoom)
+    native_resolution = metres_per_pixel(lat, zoom)
+
     # Downsampling after stitching rather than fetching a lower zoom: the
     # extra detail is averaged in rather than thrown away, and the tile grid
     # still lines up with the Mercator maths georay uses.
     longest = max(width, height)
     shrink = 1.0
-    if args.max_pixels > 0 and longest > args.max_pixels:
-        shrink = args.max_pixels / float(longest)
-    print("  ground resolution %.2f m/px native, %.2f m/px after scaling"
-          % (native_resolution, native_resolution / shrink))
-    if shrink < 1.0:
-        print("  raster will be scaled to %d x %d (%.1f MB)"
-              % (int(width * shrink), int(height * shrink),
-                 int(width * shrink) * int(height * shrink) * 3 / 1e6))
+    if max_pixels > 0 and longest > max_pixels:
+        shrink = max_pixels / float(longest)
 
-    if total > args.max_tiles:
-        raise SystemExit(
-            "refusing: %d tiles exceeds --max-tiles %d.\n"
-            "Lower --zoom or --extent. OpenStreetMap's tile policy treats runs over\n"
-            "250 tiles as bulk downloading, which their servers are donated resources\n"
-            "and not intended for." % (total, args.max_tiles))
+    say("  %d x %d tiles = %d, raster %d x %d, %.2f m/px native, %.2f m/px stored"
+        % (tiles_x, tiles_y, total, int(width * shrink), int(height * shrink),
+           native_resolution, native_resolution / shrink))
 
-    if args.dry_run:
+    if total > max_tiles:
+        say("  refusing: %d tiles exceeds --max-tiles %d. Lower --zoom or the window size.\n"
+            "  OpenStreetMap's policy treats runs over 250 tiles as bulk downloading,\n"
+            "  and their servers are donated resources not intended for it."
+            % (total, max_tiles))
+        return -1
+
+    if dry_run:
         return 0
 
     try:
         from PIL import Image
     except ImportError:
-        raise SystemExit("this script needs Pillow to decode PNG tiles: pip install pillow")
+        raise SystemExit("this script needs Pillow to decode tiles: pip install pillow")
 
-    os.makedirs(args.cache, exist_ok=True)
-    os.makedirs(os.path.dirname(os.path.abspath(args.out)), exist_ok=True)
+    os.makedirs(cache_dir, exist_ok=True)
+    os.makedirs(os.path.dirname(os.path.abspath(out_path)), exist_ok=True)
 
     canvas = Image.new("RGB", (width, height), (128, 128, 128))
     fetched = cached = failed = 0
     for row, ty in enumerate(range(tile_y0, tile_y1 + 1)):
         for col, tx in enumerate(range(tile_x0, tile_x1 + 1)):
             try:
-                data, from_cache = fetch_tile(url, args.zoom, tx, ty, args.cache)
+                data, from_cache = fetch_tile(url, zoom, tx, ty, cache_dir)
             except urllib.error.HTTPError as error:
-                print("  tile %d/%d HTTP %s" % (tx, ty, error.code))
+                say("  tile %d/%d HTTP %s" % (tx, ty, error.code))
                 failed += 1
                 continue
             except Exception as error:  # noqa: BLE001
-                print("  tile %d/%d failed: %s" % (tx, ty, error))
+                say("  tile %d/%d failed: %s" % (tx, ty, error))
                 failed += 1
                 continue
 
@@ -244,19 +209,21 @@ def main():
                 fetched += 1
                 # Only sleep for requests actually made; replaying from cache
                 # should be instant.
-                time.sleep(args.delay)
+                time.sleep(delay)
 
-            import io
             tile_image = Image.open(io.BytesIO(data)).convert("RGB")
             if tile_image.size != (TILE_PIXELS, TILE_PIXELS):
                 tile_image = tile_image.resize((TILE_PIXELS, TILE_PIXELS))
             canvas.paste(tile_image, (col * TILE_PIXELS, row * TILE_PIXELS))
 
-        print("  row %d/%d" % (row + 1, tiles_y), end="\r", flush=True)
-    print()
+        if not quiet:
+            print("  row %d/%d" % (row + 1, tiles_y), end="\r", flush=True)
+    if not quiet:
+        print()
 
     if failed == total:
-        raise SystemExit("no tiles were fetched; check --url and your connection")
+        say("  no tiles were fetched for this window; check --url and your connection")
+        return -1
 
     if shrink < 1.0:
         canvas = canvas.resize((int(width * shrink), int(height * shrink)), Image.LANCZOS)
@@ -268,20 +235,197 @@ def main():
     # georay map raster, little-endian:
     #   magic[8], zoom, tile_x, tile_y, tiles_x, tiles_y, width, height,
     #   attribution[128], then width*height RGB triples, row 0 northernmost.
-    temp_path = args.out + ".partial"
+    #
+    # Written to a temporary name and renamed, so an interrupted run never
+    # leaves a half-written window that looks complete to georay.
+    temp_path = out_path + ".partial"
     with open(temp_path, "wb") as handle:
         handle.write(MAGIC)
-        handle.write(struct.pack("<iiiiiii", args.zoom, tile_x0, tile_y0, tiles_x, tiles_y,
+        handle.write(struct.pack("<iiiiiii", zoom, tile_x0, tile_y0, tiles_x, tiles_y,
                                  width, height))
         handle.write(attribution)
         handle.write(canvas.tobytes())
-    os.replace(temp_path, args.out)
+    os.replace(temp_path, out_path)
 
-    print("%d fetched, %d from cache, %d failed -> %s (%.1f MB)"
-          % (fetched, cached, failed, args.out, os.path.getsize(args.out) / 1e6))
+    say("  %d fetched, %d from cache, %d failed -> %s (%.1f MB)"
+        % (fetched, cached, failed, out_path, os.path.getsize(out_path) / 1e6))
     if failed:
-        print("WARNING: %d tiles are missing and show as flat grey in the scene." % failed)
-    return 0
+        say("  WARNING: %d tiles are missing and show as flat grey." % failed)
+    return fetched
+
+
+def read_route(path):
+    """Waypoint positions from a QGC .plan or a QGC WPL list.
+
+    A deliberately small reader: a corridor only needs latitudes and
+    longitudes, so it skips the frames, altitudes and command semantics that
+    georay's own loader cares about.
+    """
+    text = open(path, encoding="utf-8", errors="replace").read()
+    stripped = text.lstrip()
+
+    # Navigation commands only. A speed change or a camera trigger carries no
+    # position, and routing a corridor through one would send it to 0,0.
+    NAV = {16, 17, 18, 19, 21, 22}
+    points = []
+
+    if stripped.startswith("{"):
+        plan = json.loads(text)
+        for item in plan.get("mission", {}).get("items", []):
+            if item.get("type") == "ComplexItem":
+                continue
+            if int(item.get("command", 16)) not in NAV:
+                continue
+            params = item.get("params") or []
+            if len(params) < 6:
+                continue
+            lat, lon = params[4], params[5]
+            if lat and lon:
+                points.append((float(lat), float(lon)))
+    else:
+        for line in text.splitlines()[1:]:
+            fields = line.split()
+            if len(fields) < 12:
+                continue
+            seq, command = int(float(fields[0])), int(float(fields[3]))
+            lat, lon = float(fields[8]), float(fields[9])
+            # Sequence 0 is the home position by convention, not a leg.
+            if seq == 0 or command not in NAV or (not lat and not lon):
+                continue
+            points.append((lat, lon))
+
+    if not points:
+        raise SystemExit("%s: no navigable waypoints found" % path)
+    return points
+
+
+def corridor_windows(points, window_m, overlap=0.75):
+    """Window centres spaced along a route.
+
+    Fetching the route's bounding box would be the obvious thing and is
+    wildly wasteful: a survey running 40 km east and 2 km north has a box
+    twenty times the area actually flown. Walking the legs and placing
+    overlapping windows along them fetches the corridor instead.
+
+    The overlap matters. georay holds one window at a time, so without it the
+    aircraft would cross a seam with nothing on either side of it.
+    """
+    step = window_m * 2.0 * overlap
+    centres = []
+
+    def push(lat, lon):
+        # Skip a centre already covered, so legs that double back over the
+        # same ground do not fetch it twice.
+        for clat, clon in centres:
+            dy = (lat - clat) * 110574.0
+            dx = (lon - clon) * 111320.0 * math.cos(math.radians(lat))
+            if math.hypot(dx, dy) < step * 0.5:
+                return
+        centres.append((lat, lon))
+
+    push(*points[0])
+    for i in range(len(points) - 1):
+        (lat0, lon0), (lat1, lon1) = points[i], points[i + 1]
+        mid_lat = math.radians((lat0 + lat1) * 0.5)
+        dy = (lat1 - lat0) * 110574.0
+        dx = (lon1 - lon0) * 111320.0 * math.cos(mid_lat)
+        length = math.hypot(dx, dy)
+        steps = max(1, int(math.ceil(length / step)))
+        for k in range(1, steps + 1):
+            t = k / float(steps)
+            push(lat0 + (lat1 - lat0) * t, lon0 + (lon1 - lon0) * t)
+    return centres
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__,
+                                     formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("--origin", default="52.5163,13.3777",
+                        help="scene centre as LAT,LON. For negative values use --origin=-33.9,18.4")
+    parser.add_argument("--extent", type=float, default=2000.0,
+                        help="half-extent of the scene in metres")
+    parser.add_argument("--zoom", type=int, default=16,
+                        help="tile zoom level (default 16, about 1.5 m per pixel at mid latitudes)")
+    parser.add_argument("--out", default="data/map.bin", help="raster to write")
+    parser.add_argument("--source", choices=sorted(SOURCES), default="osm",
+                        help="named tile source: osm or basemapde (street maps) or esri (imagery)")
+    parser.add_argument("--url", help="XYZ tile URL template, overriding --source")
+    parser.add_argument("--max-pixels", type=int, default=4096,
+                        help="downsample the stitched raster to at most this on its longest "
+                             "side (default 4096). Caps file size and stays inside the GPU's "
+                             "texture limit.")
+    parser.add_argument("--attribution",
+                        help="credit line georay displays while the map is shown; "
+                             "defaults to the one the chosen --source requires")
+    parser.add_argument("--cache", default="data/tiles", help="per-tile download cache")
+    parser.add_argument("--max-tiles", type=int, default=250,
+                        help="refuse windows larger than this (OSM treats 250+ as bulk)")
+    parser.add_argument("--delay", type=float, default=0.12,
+                        help="seconds between requests, to stay a polite client")
+    parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument("--force", action="store_true",
+                        help="re-fetch windows that already exist")
+    parser.add_argument("--along", metavar="MISSION",
+                        help="fetch a corridor along a .plan or .waypoints route instead of a "
+                             "single square, writing one window per stretch")
+    parser.add_argument("--window", type=float, default=1200.0,
+                        help="half-extent of each corridor window in metres (default 1200)")
+    parser.add_argument("--out-dir", default="data/windows",
+                        help="directory to write corridor windows into")
+    args = parser.parse_args()
+
+    # A source carries its own attribution. Overriding the URL without saying
+    # who to credit would silently keep the previous source's credit line,
+    # which is worse than no credit at all.
+    source_url, source_attribution = SOURCES[args.source]
+    url = args.url or source_url
+    attribution_text = args.attribution or (source_attribution if not args.url
+                                            else "UNKNOWN TILE SOURCE")
+
+    if not 1 <= args.zoom <= 19:
+        raise SystemExit("--zoom must be between 1 and 19")
+
+    # --- a corridor along a flight plan ----------------------------------
+    if args.along:
+        points = read_route(args.along)
+        centres = corridor_windows(points, args.window)
+        print("%s: %d waypoints -> %d window(s) of %.0f m half-extent at zoom %d"
+              % (args.along, len(points), len(centres), args.window, args.zoom))
+
+        written = skipped = refused = 0
+        for i, (clat, clon) in enumerate(centres):
+            name = "w%03d_%+.4f_%+.4f" % (i, clat, clon)
+            out = os.path.join(args.out_dir, name + ".map")
+            if os.path.exists(out) and not args.force:
+                skipped += 1
+                continue
+            print("[%d/%d] %s" % (i + 1, len(centres), name))
+            if fetch_window(clat, clon, args.window, args.zoom, url, attribution_text,
+                            args.cache, args.max_tiles, args.delay, args.max_pixels,
+                            out, args.dry_run) < 0:
+                refused += 1
+            else:
+                written += 1
+
+        print("\n%d written, %d already present, %d refused -> %s"
+              % (written, skipped, refused, args.out_dir))
+        if not args.dry_run and (written or skipped):
+            print("Now run:\n  ./build/georay --dem data/dem --map-satellite-dir %s \\\n"
+                  "      --origin %.4f,%.4f --mission %s"
+                  % (args.out_dir, points[0][0], points[0][1], args.along))
+        return 0
+
+    # --- a single square window ------------------------------------------
+    try:
+        lat_text, lon_text = args.origin.split(",")
+        lat, lon = float(lat_text), float(lon_text)
+    except ValueError:
+        raise SystemExit("--origin wants LAT,LON")
+
+    print("scene %.5f,%.5f +/- %.0f m at zoom %d" % (lat, lon, args.extent, args.zoom))
+    return 0 if fetch_window(lat, lon, args.extent, args.zoom, url, attribution_text,
+                             args.cache, args.max_tiles, args.delay, args.max_pixels,
+                             args.out, args.dry_run) >= 0 else 1
 
 
 if __name__ == "__main__":

@@ -87,6 +87,14 @@ bool Scene::setMapRaster(int layer, const MapRaster& map) {
     return true;
 }
 
+void Scene::clearMapLayer(int layer) {
+    if (layer < 0 || layer >= kMapLayers) return;
+    if (map_textures_[layer] != 0) {
+        glDeleteTextures(1, &map_textures_[layer]);
+        map_textures_[layer] = 0;
+    }
+}
+
 void Scene::clearMapRasters() {
     for (int layer = 0; layer < kMapLayers; ++layer) {
         if (map_textures_[layer] != 0) {

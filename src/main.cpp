@@ -36,6 +36,9 @@ void printUsage() {
         "  --mission FILE                a QGroundControl .plan or QGC WPL .waypoints\n"
         "                                list to fly\n"
         "  --map-mode MODE               satellite (default), street, or off\n"
+        "  --map-satellite-dir DIR       a directory of .map windows, streamed by\n"
+        "  --map-street-dir DIR          position as the aircraft flies\n"
+        "  --advance SECONDS             run the simulation forward before drawing\n"
         "\n"
         "Real elevation data (optional; synthetic terrain is used without it):\n"
         "  --dem DIR                     directory of SRTM .hgt tiles\n"
@@ -129,6 +132,23 @@ int main(int argc, char** argv) {
         }
         if (arg == "--mission" && i + 1 < argc) {
             options.mission_path = argv[++i];
+            continue;
+        }
+        if (arg == "--advance" && i + 1 < argc) {
+            char extra = 0;
+            if (std::sscanf(argv[++i], "%lf%c", &options.advance_seconds, &extra) != 1 ||
+                options.advance_seconds < 0.0 || options.advance_seconds > 86400.0) {
+                std::cerr << "georay: --advance wants seconds (0 to 86400)\n";
+                return 2;
+            }
+            continue;
+        }
+        if (arg == "--map-satellite-dir" && i + 1 < argc) {
+            options.satellite_map_dir = argv[++i];
+            continue;
+        }
+        if (arg == "--map-street-dir" && i + 1 < argc) {
+            options.street_map_dir = argv[++i];
             continue;
         }
         if (arg == "--map-mode" && i + 1 < argc) {

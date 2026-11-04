@@ -43,6 +43,13 @@ public:
 
     void setPattern(Pattern p) { pattern_ = p; }
     Pattern pattern() const { return pattern_; }
+
+    // The pattern's reference point, in ENU. Exposed because ENU means
+    // something different after the frame re-anchors: the caller holds the
+    // geodetic truth and puts it back, or the orbit centre quietly follows
+    // the aircraft and the flight runs away from its own scene.
+    void setCentreEnu(const glm::dvec2& centre) { centre_enu_ = centre; }
+    const glm::dvec2& centreEnu() const { return centre_enu_; }
     void setGimbalMode(GimbalMode m) { gimbal_mode_ = m; }
     GimbalMode gimbalMode() const { return gimbal_mode_; }
 
@@ -63,8 +70,12 @@ public:
     // resolved against the terrain here, once, rather than every frame: the
     // frame semantics need the ground model, and re-deriving them per frame
     // would make the aircraft's altitude depend on where it currently is.
+    // `keep_progress` re-derives the route in a new frame without sending
+    // the aircraft back to waypoint one - which is what a re-anchor needs,
+    // and what a freshly loaded plan must not do.
     void setMission(const georay::Mission& mission, const Terrain& terrain,
-                    const EnuFrame& frame, double geoid_separation_m);
+                    const EnuFrame& frame, double geoid_separation_m,
+                    bool keep_progress = false);
     const georay::Mission& mission() const { return mission_; }
     bool hasMission() const { return !route_.empty(); }
     // The route in ENU, for drawing it.

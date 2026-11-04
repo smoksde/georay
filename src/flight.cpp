@@ -31,7 +31,10 @@ const char* FlightSimulator::gimbalModeName(GimbalMode m) {
 }
 
 void FlightSimulator::setMission(const georay::Mission& mission, const Terrain& terrain,
-                                 const EnuFrame& frame, double geoid_separation_m) {
+                                 const EnuFrame& frame, double geoid_separation_m,
+                                 bool keep_progress) {
+    const double previous_progress = along_route_m_;
+
     mission_ = mission;
     route_.clear();
     leg_start_m_.clear();
@@ -55,6 +58,12 @@ void FlightSimulator::setMission(const georay::Mission& mission, const Terrain& 
     }
 
     if (mission.cruise_speed_mps > 0.5) speed_mps_ = mission.cruise_speed_mps;
+
+    // The same route in a new frame is the same route: distance along it is
+    // frame-independent, so progress carries over directly.
+    if (keep_progress && route_length_m_ > 1e-6) {
+        along_route_m_ = glm::clamp(previous_progress, 0.0, route_length_m_);
+    }
 }
 
 void FlightSimulator::configure(Pattern pattern, const glm::dvec2& centre_enu) {

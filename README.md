@@ -86,6 +86,8 @@ Other modes:
 | `./build/georay --origin LAT,LON --extent M` | Where the scene is, and how big. |
 | `./build/georay --mission FILE` | Fly a `.plan` or `.waypoints` file. |
 | `./build/georay --map-mode street` | Start on the street map rather than imagery. |
+| `./build/georay --map-satellite-dir DIR` | Stream imagery windows by position. |
+| `./build/georay --advance SECONDS` | Run the simulation forward before drawing. |
 
 ## Flight plans from QGroundControl and Pixhawk
 
@@ -132,6 +134,56 @@ those itself and georay does not re-implement its pattern generator.
 The route is drawn with a plumb line from every waypoint down to the ground,
 which is the point — a waypoint's altitude is the thing most often wrong in a
 plan, and a route drawn without them tells you nothing about height.
+
+## Flying beyond one scene
+
+georay works in a local ENU tangent plane, and flat ground falls away from it
+as `d²/2R` — 0.5 m at 2 km, 49 m at 25 km, **4.4 km across Brandenburg**. That,
+not the imagery, is what caps how far a single scene can reach.
+
+The fix is to move the frame rather than enlarge it. The origin re-anchors to
+the aircraft as it flies, so the curvature error is bounded by the *visible*
+radius instead of by the size of the world — and the geolocation maths never
+learns that anything changed, which is why none of it had to be touched. The
+alternative, a local frame per terrain tile, would have made the ray marcher
+walk between frames mid-solve; that is the most carefully verified code here
+and not worth disturbing for the same answer.
+
+```bash
+./build/georay --scene berlin-corridor
+```
+
+Elevation already streams: `DemSource` loads one-degree `.hgt` tiles on demand,
+so the world is as large as the tiles on disk. Imagery streams from a
+**directory of overlapping windows**, fetched along a route rather than over a
+bounding box:
+
+```bash
+scripts/fetch_map.py --along missions/berlin-survey.plan --window 900 --zoom 17 --source esri --out-dir data/windows
+```
+
+![streaming](docs/screenshot-streaming.png)
+
+*`--scene berlin-corridor`: imagery streamed from a directory of windows
+fetched along the QGC survey route. The HUD shows the drift from the current
+anchor, how many times it has moved, and which window is resident.*
+
+A survey running 40 km east and 2 km north has a bounding box twenty times the
+area actually flown, so the corridor is the difference between a feasible
+fetch and an abusive one. The HUD shows the drift from the current anchor, how
+many times it has moved, and which window is resident.
+
+**A bounded pattern never re-anchors.** An orbit sits at a constant distance
+from its own centre, so a threshold below that radius would rebuild the world
+every twenty seconds to move the origin somewhere no better than where it was.
+The threshold sits at 0.6 of the terrain half-extent, with a dwell, so only a
+flight that actually travels pays for it.
+
+**What this does not do is make a whole region appear.** Imagery has to have
+been fetched to be shown. Berlin + Brandenburg at the resolution a UAV camera
+resolves is 6.7 million tiles and 114 GB, and a single GPU texture over that
+area tops out near 15 m per pixel however large it is. Fetch the corridor a
+flight covers; that is a thousandth of the data for the same sortie.
 
 ## Real maps and satellite imagery
 
@@ -484,8 +536,8 @@ src/render/   terrain mesh, 3D overlays, the orbit camera
 src/          the application: window, input, HUD, flight simulation, selftest
 shaders/      GLSL
 assets/fonts/ JetBrains Mono, its licence, and the baked atlas
-scenes/       ready-made scenes: berlin-satellite, berlin-mission, berlin,
-              munich, zugspitze
+scenes/       ready-made scenes: berlin-satellite, berlin-mission,
+              berlin-corridor, berlin-transit, berlin, munich, zugspitze
 missions/     the same survey plan in both QGC formats
 scripts/      fetch_dem.py and fetch_map.py (the only things here that touch
               the network), and bake_font.py

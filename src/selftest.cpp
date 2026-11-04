@@ -1013,6 +1013,116 @@ void testMission() {
           "a plan with no navigable waypoints is refused");
 }
 
+// The floating origin's correctness condition, and the whole reason it is
+// safe: geolocating the same pixel from the same aircraft must give the same
+// place on Earth no matter where the ENU frame happens to be anchored.
+//
+// If that fails, flying across a region silently changes the answers - and
+// nothing on screen would show it, because every frame looks locally correct.
+void testFloatingOrigin() {
+    std::printf("floating origin\n");
+
+    const std::string directory = makeTempDir();
+    check(!directory.empty(), "temporary directory for the floating-origin tests");
+    if (directory.empty()) return;
+
+    // A DEM with a known smooth slope, so the terrain is the same ground
+    // whichever window is resampled out of it.
+    const int side = 61;
+    std::vector<int16_t> sloped(size_t(side * side));
+    for (int r = 0; r < side; ++r) {
+        for (int c = 0; c < side; ++c) {
+            sloped[size_t(r * side + c)] = int16_t(1700 - 20 * r + 10 * c);
+        }
+    }
+    writeTestHgt(directory, "N48E011", side, sloped);
+
+    const GeoidModel geoid = GeoidModel::constant(47.0);
+    const CameraModel cam = CameraModel::fromSensor(12.0, 13.2, 1920, 1080);
+
+    // One aircraft, one pixel, three different frame anchors - the kind of
+    // spread a flight would produce between re-anchors.
+    // Comfortably above the ground, which at this spot is about 1447 m
+    // ellipsoidal. An aircraft below the surface is a separate case: the ray
+    // marcher returns the camera's own position immediately, and that answer
+    // is frame-independent for trivial reasons - it would satisfy every
+    // assertion below while testing none of them.
+    UavState state;
+    state.position = Geodetic(48.5, 11.5, 1900.0);
+    state.attitude = {35.0, 2.0, 4.0};
+    state.gimbal = {-20.0, 55.0, 0.0};
+    state.camera_offset_body = glm::dvec3(0.25, 0.0, 0.35);
+    const glm::dvec2 pixel(1310.0, 690.0);
+
+    const Geodetic anchors[] = {
+        Geodetic(48.5, 11.5, 0.0),        // directly beneath the aircraft
+        Geodetic(48.492, 11.487, 0.0),    // about 1.5 km away
+        Geodetic(48.518, 11.528, 0.0),    // about 2.5 km the other way
+    };
+
+    Geodetic first_answer;
+    bool have_first = false;
+    double worst_shift = 0.0;
+
+    for (const Geodetic& anchor : anchors) {
+        Geodetic origin = anchor;
+        DemSource dem(directory);
+        double ground = 0.0;
+        check(dem.sampleOrthometric(origin.latitude_deg, origin.longitude_deg, ground),
+              "the anchor is covered by the DEM");
+        origin.altitude_m = geoid.toEllipsoidal(origin.latitude_deg, origin.longitude_deg, ground);
+
+        const EnuFrame frame(origin);
+        Terrain terrain(Terrain::Kind::Flat, 3000.0, 257, 0.0);
+        check(terrain.loadFromDem(dem, geoid, frame).ok, "the window loads at this anchor");
+
+        const GeolocateResult result = geolocatePixel(state, cam, terrain, frame, pixel);
+        check(result.valid, "the pixel finds ground at this anchor");
+        if (!result.valid) continue;
+        // The ray has to have actually travelled. Without this the test can
+        // pass on the underground early-out, which is how it was vacuous the
+        // first time it was written.
+        check(result.slant_range_m > 100.0,
+              "the ray travelled a real distance, so this is not the underground case");
+
+        if (!have_first) {
+            first_answer = result.ground_geodetic;
+            have_first = true;
+            continue;
+        }
+        // Compare as a distance on the ground, which is what actually
+        // matters, rather than as degrees.
+        worst_shift = std::max(worst_shift, horizontalDistance(first_answer,
+                                                               result.ground_geodetic));
+        checkNear(result.ground_geodetic.altitude_m - first_answer.altitude_m, 0.0, 0.5,
+                  "re-anchoring does not change the reported elevation");
+    }
+
+    check(have_first, "the floating-origin comparison actually ran");
+    // Not bit-identical, and it cannot be: each anchor resamples the DEM onto
+    // a differently-placed grid, so the interpolated surface differs slightly
+    // between windows. Half a metre over terrain sloping 1.2 km per degree is
+    // that resampling, not a frame error - a genuine frame bug moves the
+    // answer by the distance between anchors, which is kilometres.
+    checkNear(worst_shift, 0.0, 0.5, "re-anchoring moves a geolocation by less than a metre");
+
+    // And the tangent-plane drop that makes all of this necessary: flat
+    // ground falls away as d^2/2R, which is what caps a single frame.
+    {
+        const Geodetic origin(52.5, 13.4, 100.0);
+        const EnuFrame frame(origin);
+        for (double distance : {2400.0, 25000.0, 120000.0}) {
+            // A point on the ellipsoid at the same height, that far east.
+            const double degrees = distance / (111320.0 * std::cos(deg2rad(52.5)));
+            const glm::dvec3 enu =
+                frame.fromGeodetic(Geodetic(52.5, 13.4 + degrees, origin.altitude_m));
+            const double expected = -distance * distance / (2.0 * 6371000.0);
+            checkNear(enu.z, expected, std::fabs(expected) * 0.05 + 0.01,
+                      "flat ground falls away from the tangent plane as d^2/2R");
+        }
+    }
+}
+
 // Writes a georay map raster with a known pixel pattern.
 std::string writeTestMap(const std::string& directory, int zoom, int tile_x, int tile_y,
                          int tiles_x, int tiles_y, const std::string& attribution,
@@ -1438,6 +1548,7 @@ int runSelfTest() {
     testGeoid();
     testDemTerrain();
     testMapRaster();
+    testFloatingOrigin();
     testJson();
     testMission();
 

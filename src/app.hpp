@@ -21,6 +21,7 @@
 #include "geo/camera_model.hpp"
 #include "geo/dem.hpp"
 #include "geo/geoid.hpp"
+#include "geo/maplibrary.hpp"
 #include "geo/maptile.hpp"
 #include "geo/mission.hpp"
 #include "geo/geolocate.hpp"
@@ -59,12 +60,21 @@ public:
         // the same ground.
         std::string satellite_map_path;
         std::string street_map_path;
+        // Directories of .map windows, streamed by position as the aircraft
+        // flies. These take precedence over the single-file paths above.
+        std::string satellite_map_dir;
+        std::string street_map_dir;
 
         // A QGroundControl .plan or a QGC WPL .waypoints list to fly.
         std::string mission_path;
 
         // Which layer to start on: "satellite", "street" or "off".
         std::string map_mode = "satellite";
+
+        // Advance the simulation by this many seconds before the first frame
+        // is drawn. Makes a long flight - and the re-anchoring it triggers -
+        // reachable from a script instead of only by waiting.
+        double advance_seconds = 0.0;
 
         double origin_latitude_deg = 48.137554;
         double origin_longitude_deg = 11.575497;
@@ -123,6 +133,31 @@ private:
     // Rebuilds the surface mesh with whatever map layers are loaded.
     void rebuildTerrainMesh();
 
+    // --- floating origin --------------------------------------------------
+    //
+    // One ENU frame is a tangent plane, and flat ground falls away from it as
+    // d^2/2R: half a metre at 2 km, 49 m at 25 km, 4.4 km across Brandenburg.
+    // That caps how far a single frame can usefully reach, which is what
+    // stopped the scene from spanning more than a few kilometres.
+    //
+    // The fix is to move the frame rather than to enlarge it. The origin
+    // follows the aircraft, so the error is bounded by the *visible* radius
+    // instead of by the size of the world, and the geolocation maths never
+    // learns that anything changed - it still sees one local frame, which is
+    // why none of it had to be touched.
+    //
+    // The alternative, a local frame per terrain tile, would have made the
+    // ray marcher walk between frames mid-solve. That is the most carefully
+    // verified code here and not worth disturbing for the same answer.
+    void reanchorFrame(const Geodetic& new_origin);
+    // Picks the map window covering the frame origin, for each layer that is
+    // backed by a library. Returns true if anything changed.
+    bool selectMapWindow();
+    // Re-anchors when the aircraft has drifted far enough from the origin
+    // that the terrain window no longer comfortably surrounds it.
+    void maybeReanchor();
+    double reanchorThreshold() const;
+
     // --- frame -----------------------------------------------------------
     void handleEvents();
     void onKeyDown(const SDL_Keysym& key);
@@ -171,6 +206,18 @@ private:
     // a real flight log would carry.
     Geodetic frame_origin_{48.137554, 11.575497, 515.0};
     EnuFrame frame_;
+    int reanchor_count_ = 0;
+    double seconds_since_reanchor_ = 1e9;  // so the first one is never delayed
+    double last_dt_ = 0.0;
+    double reanchor_distance_m_ = 0.0;  // how far the aircraft is from the origin now
+
+    // Frame-independent copies of the state that would otherwise be silently
+    // relocated by a re-anchor. Anything stored in ENU metres has to be kept
+    // in geodetic as well, or it quietly moves when the origin does.
+    Geodetic track_target_geodetic_;
+    Geodetic pattern_centre_geodetic_;
+    Geodetic view_target_geodetic_;
+    bool have_view_target_ = false;
 
     std::unique_ptr<Terrain> terrain_;
     Mission mission_;
@@ -186,6 +233,9 @@ private:
     // than re-reading and re-uploading on a keypress.
     MapRaster maps_[2];
     bool map_is_imagery_[2] = {true, false};
+    // Layers backed by a directory of windows rather than a single file.
+    MapLibrary map_libraries_[2];
+    bool map_from_library_[2] = {false, false};
     Terrain::DemLoadReport dem_report_;
     bool using_dem_ = false;
     // A flat ground model at the frame origin's elevation, used only to

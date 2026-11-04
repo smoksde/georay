@@ -83,6 +83,27 @@ Faces are named sizes, not scale factors - scaling a baked face just blurs it.
 Lay HUD panels out from `TextRenderer::lineHeight()` and `advance()` rather
 than from constants; hard-coded offsets collided the moment the font changed.
 
+## The floating origin
+
+The ENU frame re-anchors to the aircraft as it flies, because one tangent
+plane cannot span more than a few tens of kilometres (`d^2/2R` is 4.4 km
+across Brandenburg). The geolocation maths is unaware of this and must stay
+that way.
+
+Anything held in ENU metres is silently relocated by a re-anchor. The ones
+that bit: the flight pattern's own centre, the gimbal's track target, the view
+camera's target, and the mission's progress along its route. If you add state
+in ENU, keep the geodetic truth beside it and restore it in
+`App::reanchorFrame`, or the thing it describes will drift away from the
+ground it was supposed to be attached to.
+
+`testFloatingOrigin` in the selftest is the invariant: the same pixel, from
+the same aircraft, must geolocate to the same place whatever the anchor. Note
+the aircraft in that test is deliberately well above the terrain - with the
+camera underground the ray marcher returns its own position, which is
+frame-independent for trivial reasons and made the test vacuous the first time
+it was written.
+
 ## Process
 
 - Verify every change: clean rebuild + `./build/georay --selftest` + a runtime

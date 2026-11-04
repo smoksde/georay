@@ -106,10 +106,16 @@ bool App::Options::loadScene(const std::string& path, Options& options, std::str
             options.satellite_map_path = value;
         } else if (key == "map-street") {
             options.street_map_path = value;
+        } else if (key == "map-satellite-dir") {
+            options.satellite_map_dir = value;
+        } else if (key == "map-street-dir") {
+            options.street_map_dir = value;
         } else if (key == "mission") {
             options.mission_path = value;
         } else if (key == "map-mode") {
             options.map_mode = value;
+        } else if (key == "advance") {
+            if (!number(options.advance_seconds)) return false;
         } else if (key == "geoid") {
             options.geoid_grid_path = value;
         } else if (key == "geoid-separation") {
@@ -268,9 +274,43 @@ bool App::buildWorld() {
     }
 
     const std::string layer_paths[2] = {options_.satellite_map_path, options_.street_map_path};
+    const std::string layer_dirs[2] = {options_.satellite_map_dir, options_.street_map_dir};
     const char* layer_names[2] = {"satellite", "street map"};
+
+    // A directory of windows takes precedence over a single file: it is the
+    // same imagery, cut up so the aircraft can fly out of one window and
+    // into the next.
     for (int layer = 0; layer < 2; ++layer) {
-        if (layer_paths[layer].empty()) continue;
+        if (layer_dirs[layer].empty()) continue;
+        std::string error;
+        if (map_libraries_[layer].open(layer_dirs[layer], error)) {
+            map_from_library_[layer] = true;
+            map_is_imagery_[layer] = (layer == 0);
+            std::cout << "georay: " << layer_names[layer] << " library "
+                      << layer_dirs[layer] << " - " << map_libraries_[layer].windowCount()
+                      << " windows\n";
+            // A window smaller than the terrain leaves the edges of the
+            // scene on bare elevation tint. That is handled correctly, but
+            // it looks like a loading failure unless it is explained.
+            const MapRaster* sample = map_libraries_[layer].windowFor(
+                frame_origin_.latitude_deg, frame_origin_.longitude_deg);
+            if (sample) {
+                const double window_m =
+                    (sample->northEdge() - sample->southEdge()) * 110574.0 * 0.5;
+                if (window_m < options_.half_extent_m) {
+                    std::cerr << "georay: " << layer_names[layer] << " windows are about "
+                              << int(window_m) << " m across against a " << int(terrain_->halfExtent())
+                              << " m terrain window, so the scene edges will show bare terrain."
+                                 " Use --extent " << int(window_m) << " or fetch wider windows.\n";
+                }
+            }
+        } else {
+            std::cerr << "georay: " << error << "\n";
+        }
+    }
+
+    for (int layer = 0; layer < 2; ++layer) {
+        if (map_from_library_[layer] || layer_paths[layer].empty()) continue;
         std::string error;
         if (!MapRaster::load(layer_paths[layer], maps_[layer], error)) {
             // Same reasoning as a missing DEM: the tool works without it, so
@@ -292,6 +332,8 @@ bool App::buildWorld() {
                   << maps_[layer].metresPerPixel(frame_origin_.latitude_deg) << " m/pixel, "
                   << maps_[layer].attribution() << "\n";
     }
+    selectMapWindow();
+
     // Start on the requested layer, falling back to whichever actually
     // loaded - asking for satellite and silently getting bare terrain
     // because the file was missing would be confusing.
@@ -317,6 +359,136 @@ bool App::buildWorld() {
 
     rebuildTerrainMesh();
     return true;
+}
+
+bool App::selectMapWindow() {
+    bool changed = false;
+    for (int layer = 0; layer < 2; ++layer) {
+        if (!map_from_library_[layer]) continue;
+
+        const MapRaster* window = map_libraries_[layer].windowFor(frame_origin_.latitude_deg,
+                                                                  frame_origin_.longitude_deg);
+        if (!window) {
+            // Flown off the edge of the fetched imagery. Drop the layer
+            // rather than leaving the last window stretched under the
+            // aircraft, which would put the wrong city on the ground.
+            if (maps_[layer].valid()) {
+                maps_[layer] = MapRaster();
+                scene_->clearMapLayer(layer);
+                changed = true;
+            }
+            continue;
+        }
+
+        // Same window as last time: the pixels are already on the GPU.
+        if (maps_[layer].valid() && maps_[layer].zoom() == window->zoom() &&
+            maps_[layer].westEdge() == window->westEdge() &&
+            maps_[layer].northEdge() == window->northEdge()) {
+            continue;
+        }
+
+        std::cout << "georay: map window -> " << map_libraries_[layer].residentName()
+                  << " (layer " << layer << ")\n";
+        maps_[layer] = *window;
+        if (!scene_->setMapRaster(layer, maps_[layer])) {
+            std::cerr << "georay: " << scene_->error() << "\n";
+            maps_[layer] = MapRaster();
+        }
+        changed = true;
+    }
+    return changed;
+}
+
+double App::reanchorThreshold() const {
+    // Far enough out that a pattern which stays near its own centre never
+    // triggers at all. An orbit sits at a constant distance from the scene
+    // origin, so a threshold below its radius re-anchors forever - rebuilding
+    // the terrain window and re-uploading the map every twenty seconds to
+    // move the origin somewhere no better than where it was.
+    //
+    // At 0.6 there is still a window-and-a-half of loaded ground ahead of the
+    // aircraft when the move does happen, which is what the threshold is
+    // actually for.
+    return terrain_->halfExtent() * 0.6;
+}
+
+void App::reanchorFrame(const Geodetic& new_origin) {
+    // Everything that lives in ENU metres is about to mean something
+    // different. Capture it as geodetic first, restore it after.
+    const Geodetic track = track_target_geodetic_;
+    const Geodetic pattern_centre = pattern_centre_geodetic_;
+    const glm::vec3 old_view_target = view_camera_.target();
+    const Geodetic view_target =
+        have_view_target_ ? view_target_geodetic_
+                          : frame_.toGeodetic(glm::dvec3(old_view_target.x, old_view_target.y,
+                                                         old_view_target.z));
+
+    frame_origin_ = new_origin;
+    // Anchor at ground level so ENU z stays near zero across the window,
+    // which keeps the numbers readable and the float positions small.
+    double ground_orthometric = 0.0;
+    if (dem_ && dem_->sampleOrthometric(new_origin.latitude_deg, new_origin.longitude_deg,
+                                        ground_orthometric)) {
+        frame_origin_.altitude_m = geoid_.toEllipsoidal(
+            new_origin.latitude_deg, new_origin.longitude_deg, ground_orthometric);
+    }
+    frame_ = EnuFrame(frame_origin_);
+
+    // The terrain window is resampled around the new origin from the DEM,
+    // which streams its own one-degree tiles from disk as they are needed -
+    // so the world is as large as the tiles on disk, not as large as one
+    // window.
+    if (dem_) loadDemTerrain();
+    selectMapWindow();
+    rebuildTerrainMesh();
+
+    // Put the frame-dependent state back where it was on the ground.
+    track_target_geodetic_ = track;
+    const glm::dvec3 track_enu = frame_.fromGeodetic(track);
+    flight_.setTrackTargetEnu(glm::dvec2(track_enu));
+
+    // The pattern's own centre, likewise. Missing this was not subtle: the
+    // orbit centre followed the frame, the frame followed the aircraft, and
+    // the aircraft flew steadily away from its own scene until the terrain
+    // window was 94 per cent interpolated.
+    pattern_centre_geodetic_ = pattern_centre;
+    flight_.setCentreEnu(glm::dvec2(frame_.fromGeodetic(pattern_centre)));
+
+    view_target_geodetic_ = view_target;
+    have_view_target_ = true;
+    const glm::dvec3 view_enu = frame_.fromGeodetic(view_target);
+    view_camera_.setTarget(glm::vec3(float(view_enu.x), float(view_enu.y),
+                                     float(terrain_->sampleHeight(view_enu.x, view_enu.y))));
+
+    // The route's ENU coordinates moved too; rebuild it from the plan, whose
+    // waypoints are geodetic and therefore unaffected.
+    if (has_mission_) {
+        const double separation =
+            geoid_.separationAt(frame_origin_.latitude_deg, frame_origin_.longitude_deg);
+        flight_.setMission(mission_, *terrain_, frame_, separation, /*keep_progress=*/true);
+    }
+
+    ++reanchor_count_;
+}
+
+void App::maybeReanchor() {
+    // Only with real elevation data. The synthetic generators are functions
+    // of ENU position, so moving the origin would slide the hills out from
+    // under the aircraft - they are a fixed test scene, not a world.
+    if (!using_dem_ || !dem_) return;
+    seconds_since_reanchor_ += last_dt_;
+
+    reanchor_distance_m_ = horizontalDistance(frame_origin_, uav_.position);
+    if (reanchor_distance_m_ < reanchorThreshold()) return;
+
+    // A dwell, so a track that skims the threshold cannot rebuild the world
+    // every frame. A re-anchor costs a terrain resample and a map upload -
+    // cheap once, ruinous sixty times a second.
+    if (seconds_since_reanchor_ < 5.0) return;
+    seconds_since_reanchor_ = 0.0;
+
+    reanchorFrame(Geodetic(uav_.position.latitude_deg, uav_.position.longitude_deg, 0.0));
+    reanchor_distance_m_ = horizontalDistance(frame_origin_, uav_.position);
 }
 
 void App::rebuildTerrainMesh() {
@@ -438,6 +610,8 @@ void App::resetSimulation() {
     flight_.configure(pattern, glm::dvec2(0.0, 0.0));
     flight_.setGimbalMode(FlightSimulator::GimbalMode::TrackPoint);
     flight_.setTrackTargetEnu(glm::dvec2(0.0, 0.0));
+    track_target_geodetic_ = frame_.toGeodetic(glm::dvec3(0.0, 0.0, 0.0));
+    pattern_centre_geodetic_ = frame_.toGeodetic(glm::dvec3(flight_.centreEnu(), 0.0));
     flight_.setHeightAboveGround(options_.height_agl_m);
     flight_.setRadius(options_.orbit_radius_m);
     flight_.setSpeed(options_.speed_mps);
@@ -625,6 +799,7 @@ void App::onKeyDown(const SDL_Keysym& key) {
             // natural "track that" gesture once you have clicked something.
             if (have_pick_ && pick_result_.valid) {
                 flight_.setTrackTargetEnu(glm::dvec2(pick_result_.ground_enu));
+                track_target_geodetic_ = pick_result_.ground_geodetic;
                 flight_.setGimbalMode(FlightSimulator::GimbalMode::TrackPoint);
             }
             break;
@@ -834,7 +1009,12 @@ void App::pickPixel(const glm::dvec2& image_pixel) {
 // --------------------------------------------------------------------------
 
 void App::update(double dt) {
-    if (!paused_) flight_.update(dt * sim_rate_, *terrain_, frame_, uav_);
+    last_dt_ = dt * sim_rate_;
+    if (!paused_) flight_.update(last_dt_, *terrain_, frame_, uav_);
+
+    // Before anything reads the frame this tick: if the aircraft has flown
+    // far enough, move the origin to it and rebuild the window around it.
+    maybeReanchor();
 
     if (follow_aircraft_) {
         // Track the point the camera is looking at rather than the aircraft
@@ -843,6 +1023,8 @@ void App::update(double dt) {
         const glm::dvec2 target = flight_.trackTargetEnu();
         view_camera_.setTarget(glm::vec3(float(target.x), float(target.y),
                                          float(terrain_->sampleHeight(target.x, target.y))));
+        view_target_geodetic_ = track_target_geodetic_;
+        have_view_target_ = true;
     }
 
     if (show_footprint_) {
@@ -1041,6 +1223,13 @@ void App::renderHud() {
         lines.addSegment({x, y + h, 0}, {x, y, 0}, colours::panel_edge);
     };
 
+    // Where the bottom-left readout begins. The left column has to stop above
+    // it: the two share an x range, and a window short enough to make them
+    // collide is not unusual - the column grew by three rows the moment
+    // streaming diagnostics were added.
+    const float answer_rows = 11.0f;
+    const float answer_top = float(height_) - (answer_rows * answer_line_h + 2.0f * pad) - pad;
+
     // A running cursor down the left column, so panels stack from whatever
     // the one above actually needed.
     float column_y = pad;
@@ -1049,7 +1238,7 @@ void App::renderHud() {
     // ---- platform and camera state ------------------------------------
     {
         const float w = column_w;
-        const float h = 20.0f * line_h + 2.0f * pad;
+        const float h = 19.0f * line_h + 2.0f * pad;
         panel(pad, column_y, w, h);
         Cursor c{text, pad * 2.0f, column_y + pad, s, line_h};
 
@@ -1084,8 +1273,9 @@ void App::renderHud() {
         c.row("FOV H/V", num(camera_.horizontalFovDeg(), 1) + "^ / " +
                              num(camera_.verticalFovDeg(), 1) + "^",
               colours::text_value);
-        c.row("FX FY", num(camera_.fx(), 1) + " " + num(camera_.fy(), 1), colours::text_dim);
-        c.row("CX CY", num(camera_.cx(), 1) + " " + num(camera_.cy(), 1), colours::text_dim);
+        c.row("FX FY CX CY", num(camera_.fx(), 0) + " " + num(camera_.fy(), 0) + " " +
+                                 num(camera_.cx(), 0) + " " + num(camera_.cy(), 0),
+              colours::text_dim);
         if (camera_.distortion().isIdentity()) {
             c.row("DISTORTION", "OFF - VIEW MATCHES MATHS", colours::text_dim);
         } else {
@@ -1102,10 +1292,28 @@ void App::renderHud() {
     // ---- simulation state ---------------------------------------------
     {
         const float w = column_w;
+        // Budget first, content second. Everything below the base rows is a
+        // diagnostic, and a diagnostic drawn over the coordinates it is meant
+        // to qualify is worse than one that is absent.
+        const float available_rows =
+            std::max(9.0f, std::floor((answer_top - pad - column_y - 2.0f * pad) / line_h));
+
         float rows = 9.0f;
-        if (using_dem_) rows += dem_report_.posts_filled > 0 ? 2.0f : 1.0f;
-        if (maps_[0].valid() || maps_[1].valid()) rows += mapVisible() ? 2.0f : 1.0f;
-        if (has_mission_) rows += 3.0f;
+        auto want = [&](float n) {
+            if (rows + n > available_rows) return false;
+            rows += n;
+            return true;
+        };
+        const bool show_gaps = using_dem_ && dem_report_.posts_filled > 0 && want(1.0f);
+        const bool show_dem = using_dem_ && want(1.0f);
+        const bool show_map_rows =
+            (maps_[0].valid() || maps_[1].valid()) && want(mapVisible() ? 2.0f : 1.0f);
+        const bool show_anchor = using_dem_ && want(1.0f);
+        const bool show_window =
+            (map_from_library_[0] || map_from_library_[1]) && want(1.0f);
+        // Last, because the route it describes is already drawn in the 3D
+        // view, while the frame anchor appears nowhere else at all.
+        const bool show_mission = has_mission_ && want(3.0f);
         const float h = rows * line_h + 2.0f * pad;
         panel(pad, column_y, w, h);
         Cursor c{text, pad * 2.0f, column_y + pad, s, line_h};
@@ -1120,7 +1328,7 @@ void App::renderHud() {
         c.row("ORBIT RADIUS", num(flight_.radius(), 0) + " M", colours::text_value);
         c.row("TERRAIN", terrain_->sourceName(),
               using_dem_ ? colours::text_good : colours::text_value);
-        if (maps_[0].valid() || maps_[1].valid()) {
+        if (show_map_rows) {
             c.row("MAP MODE", mapLayerName(),
                   mapVisible() ? colours::text_good : colours::text_dim);
             if (mapVisible()) {
@@ -1154,7 +1362,26 @@ void App::renderHud() {
             // would be inventing a number for the most visible field here.
             c.row("FOOTPRINT", "PARTLY OFF GROUND", colours::text_warn);
         }
-        if (has_mission_) {
+        if (show_anchor) {
+            // The floating origin, made visible. Without this the frame
+            // moves silently, and a reader has no way to tell whether the
+            // coordinates they are looking at came from one anchor or six.
+            c.row("ANCHOR", num(reanchor_distance_m_, 0) + "/" +
+                                num(reanchorThreshold(), 0) + " M  " +
+                                std::to_string(reanchor_count_) + " MOVES",
+                  colours::text_dim);
+        }
+        if (show_window) {
+            const int layer = map_layer_ >= 0 ? map_layer_ : 0;
+            const MapLibrary& library = map_libraries_[layer];
+            c.row("MAP WINDOW",
+                  library.residentName().empty()
+                      ? std::string("NONE HERE - NOT FETCHED")
+                      : library.residentName() + "  " +
+                            std::to_string(library.windowCount()) + " AVAIL",
+                  library.residentName().empty() ? colours::text_warn : colours::text_value);
+        }
+        if (show_mission) {
             c.blank();
             c.line("MISSION", colours::text_primary);
             c.row("PLAN", mission_.name.substr(0, 22), colours::text_good);
@@ -1176,9 +1403,9 @@ void App::renderHud() {
     {
         const float col_w = 30.0f * text.advance(answer_face);
         const float w = answerPanelWidth();
-        const float h = 11.0f * answer_line_h + 2.0f * pad;
+        const float h = answer_rows * answer_line_h + 2.0f * pad;
         const float x = pad;
-        const float y = float(height_) - h - pad;
+        const float y = answer_top;
         panel(x, y, w, h);
 
         Cursor left{text, x + pad, y + pad, answer_face, answer_line_h};
@@ -1478,6 +1705,18 @@ int App::run() {
     const double frequency = double(SDL_GetPerformanceFrequency());
     double fps_accumulator = 0.0;
     int fps_frames = 0;
+
+    // Fast-forward before anything is drawn. Stepped at a fixed rate rather
+    // than in one jump, because the flight patterns and the re-anchoring are
+    // both incremental and a single enormous dt would skip straight past
+    // them.
+    if (options_.advance_seconds > 0.0) {
+        const double step = 0.05;
+        const int steps = int(options_.advance_seconds / step);
+        for (int i = 0; i < steps; ++i) update(step);
+        std::cout << "georay: advanced " << options_.advance_seconds << " s, "
+                  << reanchor_count_ << " frame re-anchor(s)\n";
+    }
 
     // In screenshot mode the cursor is parked over the middle of the camera
     // inset and a pixel is picked, so the captured frame exercises the

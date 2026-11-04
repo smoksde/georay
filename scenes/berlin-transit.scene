@@ -1,0 +1,18 @@
+# A long transit out of Berlin, to exercise the floating origin.
+#
+# The aircraft flies well past the terrain window it started in, so the ENU
+# frame re-anchors to it repeatedly. Elevation streams from the .hgt tiles on
+# disk, so the world is as large as the tiles you have fetched rather than as
+# large as one window.
+#
+#   scripts/fetch_dem.py --origin 52.5163,13.3777 --extent 40000
+
+name              BERLIN - LONG TRANSIT
+origin            52.5163,13.3777
+extent            6000
+dem               data/dem
+geoid-separation  39.5
+
+pattern           transit
+height-agl        400
+speed             60

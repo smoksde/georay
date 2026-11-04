@@ -91,6 +91,7 @@ add_library(georay_geo STATIC
     src/geo/dem.cpp
     src/geo/geoid.cpp
     src/geo/json.cpp
+    src/geo/maplibrary.cpp
     src/geo/maptile.cpp
     src/geo/mission.cpp
     src/geo/pose.cpp
