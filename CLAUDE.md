@@ -104,6 +104,24 @@ camera underground the ray marcher returns its own position, which is
 frame-independent for trivial reasons and made the test vacuous the first time
 it was written.
 
+## Streaming
+
+Three caches, all bounded, all for the same reason - the aircraft travels and
+does not come back:
+
+- `DemSource` holds at most `kDefaultTileLimit` one-degree tiles (26 MB each),
+  least-recently-used first out.
+- `MapLibrary` holds exactly one window. More would need a texture array and
+  a redirect table in the shader; one window plus the re-anchor that rebuilds
+  the terrain mesh anyway is the same machinery for a fraction of the cost.
+- `MapLibrary::open` reads headers only. A region-sized library is dozens of
+  windows of tens of megabytes; reading them in full to learn four numbers
+  each would be a gigabyte of disk traffic before the first frame.
+
+The map window must change in lockstep with the terrain mesh rebuild, because
+the mesh carries baked texture coordinates. Swapping one without the other
+misregisters the map.
+
 ## Process
 
 - Verify every change: clean rebuild + `./build/georay --selftest` + a runtime

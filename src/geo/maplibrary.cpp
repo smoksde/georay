@@ -62,23 +62,22 @@ bool MapLibrary::open(const std::string& directory, std::string& error) {
 
     for (const std::string& name : names) {
         const std::string path = directory + "/" + name;
-        // Reading each window in full just to learn its bounds would mean
-        // tens of megabytes per window at start-up; MapRaster::load is the
-        // only reader available, so this is the one place that pays that
-        // cost - once, at open, and then never again.
-        MapRaster raster;
+        // Header only. A region-sized library is dozens of windows of tens
+        // of megabytes each; reading them all in full to learn four numbers
+        // apiece would be a gigabyte of disk traffic before the first frame.
+        MapRasterInfo info;
         std::string load_error;
-        if (!MapRaster::load(path, raster, load_error)) {
+        if (!MapRaster::readHeader(path, info, load_error)) {
             last_error_ = load_error;
             continue;
         }
         Window window;
         window.path = path;
         window.name = name.substr(0, name.size() - 4);
-        window.south = raster.southEdge();
-        window.north = raster.northEdge();
-        window.west = raster.westEdge();
-        window.east = raster.eastEdge();
+        window.south = info.southEdge();
+        window.north = info.northEdge();
+        window.west = info.westEdge();
+        window.east = info.eastEdge();
         windows_.push_back(window);
     }
 

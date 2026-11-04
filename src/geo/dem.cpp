@@ -170,8 +170,19 @@ bool HgtTile::sample(double lat_deg, double lon_deg, double& height_m) const {
 const HgtTile* DemSource::tileFor(double lat_deg, double lon_deg) const {
     const std::string name = HgtTile::tileNameFor(lat_deg, lon_deg);
 
+    // Move to the back of the use order on every hit, so the front is always
+    // genuinely the least recently used.
+    auto touch = [&]() {
+        const auto at = std::find(recent_.begin(), recent_.end(), name);
+        if (at != recent_.end()) recent_.erase(at);
+        recent_.push_back(name);
+    };
+
     const auto found = tiles_.find(name);
-    if (found != tiles_.end()) return &found->second;
+    if (found != tiles_.end()) {
+        touch();
+        return &found->second;
+    }
     // Remembered misses: without this, every sample over a gap re-stats a
     // file that is not there, which over a 263k-post resample is a quarter of
     // a million failed opens.
@@ -185,7 +196,18 @@ const HgtTile* DemSource::tileFor(double lat_deg, double lon_deg) const {
         last_error_ = error;
         return nullptr;
     }
-    return &tiles_.emplace(name, std::move(tile)).first->second;
+    ++load_count_;
+    const HgtTile* loaded = &tiles_.emplace(name, std::move(tile)).first->second;
+    touch();
+
+    // Evict after inserting, never before: dropping a tile to make room for
+    // one that then fails to load would throw away good data for nothing.
+    while (tiles_.size() > tile_limit_ && !recent_.empty()) {
+        const std::string oldest = recent_.front();
+        recent_.erase(recent_.begin());
+        if (oldest != name) tiles_.erase(oldest);
+    }
+    return loaded;
 }
 
 bool DemSource::sampleOrthometric(double lat_deg, double lon_deg, double& height_m) const {

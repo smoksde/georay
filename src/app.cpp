@@ -193,6 +193,15 @@ bool App::initialise(const Options& options) {
     // this tool hits is not mistaken for that one.
     glGetError();
 
+    {
+        // Worth stating once at start-up: it is the hard ceiling on how much
+        // ground a single map raster can cover, and it varies by machine.
+        GLint max_texture = 0;
+        glGetIntegerv(GL_MAX_TEXTURE_SIZE, &max_texture);
+        std::cout << "georay: GL " << glGetString(GL_VERSION) << ", max texture "
+                  << max_texture << " px\n";
+    }
+
     scene_ = std::make_unique<Scene>();
     if (!scene_->initialise()) {
         std::cerr << "georay: shader setup failed: " << scene_->error() << "\n";
@@ -1374,11 +1383,15 @@ void App::renderHud() {
         if (show_window) {
             const int layer = map_layer_ >= 0 ? map_layer_ : 0;
             const MapLibrary& library = map_libraries_[layer];
+            // The name carries the window's own position, which makes it
+            // long. Truncated to what the column holds, because a value that
+            // runs past its panel is worse than one that is abbreviated.
+            std::string name = library.residentName();
+            if (name.size() > 14) name = name.substr(0, 14) + "..";
             c.row("MAP WINDOW",
                   library.residentName().empty()
-                      ? std::string("NONE HERE - NOT FETCHED")
-                      : library.residentName() + "  " +
-                            std::to_string(library.windowCount()) + " AVAIL",
+                      ? std::string("NONE - NOT FETCHED")
+                      : name + " " + std::to_string(library.windowCount()),
                   library.residentName().empty() ? colours::text_warn : colours::text_value);
         }
         if (show_mission) {

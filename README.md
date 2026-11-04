@@ -87,6 +87,7 @@ Other modes:
 | `./build/georay --mission FILE` | Fly a `.plan` or `.waypoints` file. |
 | `./build/georay --map-mode street` | Start on the street map rather than imagery. |
 | `./build/georay --map-satellite-dir DIR` | Stream imagery windows by position. |
+| `./build/georay --map-street-dir DIR` | The same for the street-map layer. |
 | `./build/georay --advance SECONDS` | Run the simulation forward before drawing. |
 
 ## Flight plans from QGroundControl and Pixhawk
@@ -179,11 +180,34 @@ every twenty seconds to move the origin somewhere no better than where it was.
 The threshold sits at 0.6 of the terrain half-extent, with a dwell, so only a
 flight that actually travels pays for it.
 
-**What this does not do is make a whole region appear.** Imagery has to have
-been fetched to be shown. Berlin + Brandenburg at the resolution a UAV camera
-resolves is 6.7 million tiles and 114 GB, and a single GPU texture over that
-area tops out near 15 m per pixel however large it is. Fetch the corridor a
-flight covers; that is a thousandth of the data for the same sortie.
+### A whole region, on the map layer
+
+Imagery over a whole Land is not feasible — Berlin + Brandenburg at the
+resolution a UAV camera resolves is 6.7 million tiles and 114 GB. A *drawn
+map* is a different matter, because cartography generalises: basemap.de at
+zoom 12 still shows the full street network and district labels at 23 m per
+pixel, where the same ground as imagery would be unrecognisable.
+
+```bash
+scripts/fetch_map.py --region 51.36,11.27,53.56,14.77 --window 20000 --zoom 12 --source basemapde --out-dir data/berlin_brandenburg
+```
+```bash
+./build/georay --scene brandenburg
+```
+
+That is 237 × 243 km in 72 windows — about 1,700 distinct tiles and under a
+gigabyte on disk. `--region` tiles a bounding box the way `--along` tiles a
+route, and the windows overlap by the same 25% so the aircraft never crosses
+a seam with nothing on either side.
+
+It is a *regional* view, not a camera view. At 23 m/px the simulated camera at
+400 m is magnifying map pixels about fifty times; fly one of the Berlin scenes
+for anything meant to be looked at. Two other things are worth knowing at this
+size: the tangent plane drops about 31 m at the corners of a 20 km window
+(against the region's ~100 m of relief — visible, correct, and bounded because
+the frame re-anchors), and one geoid constant is good to a couple of metres
+across a whole Land rather than the few centimetres it manages over a single
+scene.
 
 ## Real maps and satellite imagery
 

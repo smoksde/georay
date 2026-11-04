@@ -755,6 +755,34 @@ void testHgtTile() {
     check(source.loadedTiles().size() == 2, "only the tiles actually needed are loaded");
     check(source.missingTiles().size() == 1, "the absent tile is reported as missing");
 
+    // The cache is bounded, because the aircraft travels. A 26 MB tile per
+    // degree means a cache that only grows is not a streaming cache - it is
+    // a slow way to load the whole dataset.
+    {
+        // Four tiles on disk, room for two.
+        for (const char* name : {"N60E010", "N60E011", "N61E010", "N61E011"}) {
+            writeTestHgt(directory, name, side, values);
+        }
+        DemSource bounded(directory, 2);
+        double h = 0.0;
+        check(bounded.sampleOrthometric(60.5, 10.5, h), "tile 1 loads");
+        check(bounded.sampleOrthometric(60.5, 11.5, h), "tile 2 loads");
+        check(bounded.residentTiles() == 2, "both fit under the limit");
+
+        check(bounded.sampleOrthometric(61.5, 10.5, h), "tile 3 loads");
+        check(bounded.residentTiles() == 2, "the limit is respected");
+        check(bounded.loadCount() == 3, "three tiles have been read so far");
+
+        // Tile 2 was used more recently than tile 1, so tile 1 is the one
+        // that should have gone.
+        check(bounded.sampleOrthometric(60.5, 11.5, h), "the recently used tile is still there");
+        check(bounded.loadCount() == 3, "...and did not have to be re-read");
+
+        check(bounded.sampleOrthometric(60.5, 10.5, h), "the evicted tile is re-read on demand");
+        check(bounded.loadCount() == 4, "...which counts as another load");
+        check(bounded.residentTiles() == 2, "and the limit still holds");
+    }
+
     // Neighbouring tiles share their edge posts, so a position on the seam
     // must give the same height whichever side it is sampled from. Getting
     // this wrong puts a one-post cliff along every degree line.
@@ -1253,6 +1281,33 @@ void testMapRaster() {
         // Both cover the same ground, which is what makes the comparison fair.
         checkNear(scaled.uvFor(52.5163, 13.3777).x, native.uvFor(52.5163, 13.3777).x, 1e-12,
                   "scaling the raster does not move its geographic bounds");
+    }
+
+    // The header-only read has to agree with the full one. A library of
+    // region-sized windows uses it to decide which covers a position, so a
+    // disagreement here would put the aircraft over the wrong window while
+    // every individual file remained perfectly valid.
+    {
+        const std::string path = writeTestMap(directory, 12, 2100, 1345, 7, 7, "(C) TEST", 64);
+        MapRaster full;
+        MapRasterInfo header;
+        std::string error;
+        check(MapRaster::load(path, full, error), "load a window in full");
+        check(MapRaster::readHeader(path, header, error), "read the same window's header");
+
+        check(header.zoom == full.zoom(), "header zoom matches");
+        check(header.width == full.width() && header.height == full.height(),
+              "header dimensions match");
+        check(header.attribution == full.attribution(), "header attribution matches");
+        checkNear(header.northEdge(), full.northEdge(), 1e-12, "header north edge matches");
+        checkNear(header.southEdge(), full.southEdge(), 1e-12, "header south edge matches");
+        checkNear(header.westEdge(), full.westEdge(), 1e-12, "header west edge matches");
+        checkNear(header.eastEdge(), full.eastEdge(), 1e-12, "header east edge matches");
+
+        // And it must refuse exactly what the full read refuses.
+        MapRasterInfo rejected;
+        check(!MapRaster::readHeader(directory + "/does_not_exist.map", rejected, error),
+              "header read refuses a missing file");
     }
 
     // Corrupt input must be refused rather than read as a raster of garbage.

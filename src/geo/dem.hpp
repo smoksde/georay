@@ -75,14 +75,31 @@ private:
     std::vector<int16_t> samples_;
 };
 
-// A directory of tiles, loaded as they are needed.
+// A directory of tiles, loaded as they are needed and evicted when too many
+// accumulate.
 //
 // Lazy rather than eager because a scene's extent rarely lines up with the
 // degree grid: a 6 km square near a corner touches four tiles, and loading a
 // whole continent's worth up front to find that out would be absurd.
+//
+// Bounded because the aircraft travels. A one-degree SRTM1 tile is 26 MB in
+// memory, so a cache that only ever grows is not a streaming cache - it is a
+// slow way to load the whole dataset. A flight across a region touches tiles
+// it will not come back to, and those have to go.
 class DemSource {
 public:
-    explicit DemSource(std::string directory) : directory_(std::move(directory)) {}
+    // Eight tiles is 207 MB and comfortably more than any single terrain
+    // window needs - a 40 km window straddling a degree corner touches four -
+    // so the working set never thrashes against the limit.
+    static constexpr size_t kDefaultTileLimit = 8;
+
+    explicit DemSource(std::string directory, size_t tile_limit = kDefaultTileLimit)
+        : directory_(std::move(directory)), tile_limit_(tile_limit > 0 ? tile_limit : 1) {}
+
+    // Tiles read from disk since construction. Climbing steadily means the
+    // limit is too low for the area being flown.
+    int loadCount() const { return load_count_; }
+    size_t residentTiles() const { return tiles_.size(); }
 
     // Orthometric height at a geodetic position. False means no data: either
     // no tile on disk covers it, or the posts around it are voids.
@@ -104,8 +121,12 @@ private:
     // Mutable because loading is a caching detail: sampling is logically a
     // const operation on a fixed directory of files.
     mutable std::map<std::string, HgtTile> tiles_;
+    // Names in use order, oldest first, so the one to drop is the front.
+    mutable std::vector<std::string> recent_;
     mutable std::map<std::string, bool> missing_;
     mutable std::string last_error_;
+    size_t tile_limit_ = kDefaultTileLimit;
+    mutable int load_count_ = 0;
 };
 
 }  // namespace georay

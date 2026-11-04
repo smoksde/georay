@@ -25,9 +25,29 @@
 
 namespace georay {
 
+// Everything a raster's header carries, without its pixels.
+//
+// A library of windows needs each one's bounds to decide which covers a
+// position, and nothing else. Reading the pixels for that would mean a
+// gigabyte of disk traffic at start-up over a region-sized library, to
+// answer a question the first 172 bytes of each file already contain.
+struct MapRasterInfo {
+    int zoom = 0;
+    int tile_x = 0, tile_y = 0, tiles_x = 0, tiles_y = 0;
+    int width = 0, height = 0;
+    std::string attribution;
+
+    double northEdge() const;
+    double southEdge() const;
+    double westEdge() const;
+    double eastEdge() const;
+};
+
 class MapRaster {
 public:
     static bool load(const std::string& path, MapRaster& out, std::string& error);
+    // Header only: bounds, zoom and attribution, without touching the pixels.
+    static bool readHeader(const std::string& path, MapRasterInfo& out, std::string& error);
 
     bool valid() const { return width_ > 0 && height_ > 0; }
     int width() const { return width_; }

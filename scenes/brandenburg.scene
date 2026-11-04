@@ -1,0 +1,39 @@
+# Berlin and Brandenburg on the clean regional map.
+#
+# The whole Land, as streamed map windows rather than one raster: 237 x 243 km
+# at about 23 m per pixel, which is where basemap.de's greyscale cartography
+# still shows the full street network and district labels. One texture over
+# that area would be capped near 15 m/px by GL_MAX_TEXTURE_SIZE and cost most
+# of a gigabyte of VRAM, so it is cut into 20 km windows and the resident one
+# follows the aircraft.
+#
+# This is a regional view, not a camera view. At 23 m/px the simulated camera
+# at 400 m is magnifying map pixels about fifty times - fly one of the Berlin
+# scenes for anything that needs to be looked at.
+#
+# Fetch it with:
+#   scripts/fetch_dem.py --origin 52.46,13.02 --extent 125000
+#   scripts/fetch_map.py --region 51.36,11.27,53.56,14.77 --window 20000 \
+#       --zoom 12 --source basemapde --max-tiles 200 --out-dir data/berlin_brandenburg
+
+name              BERLIN + BRANDENBURG
+origin            52.5163,13.3777
+# Matched to the map windows, so the terrain window is covered edge to edge.
+# At this size the tangent plane drops about 31 m at the corners, against the
+# region's ~100 m of relief - visible, physically correct, and bounded because
+# the frame re-anchors as the aircraft travels.
+extent            20000
+
+dem               data/dem
+map-street-dir    data/berlin_brandenburg
+map-mode          street
+
+# EGM96 over Brandenburg runs about 39-42 m, so one constant is good to a
+# couple of metres across the whole region rather than the few centimetres it
+# manages over a single scene. Fine for a regional view; load a geoid grid if
+# the elevations have to be better than that.
+geoid-separation  40.0
+
+pattern           transit
+height-agl        1500
+speed             80

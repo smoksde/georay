@@ -39,13 +39,12 @@ double latForTileY(double y, double n) {
 
 }  // namespace
 
-bool MapRaster::load(const std::string& path, MapRaster& out, std::string& error) {
-    std::ifstream file(path, std::ios::binary);
-    if (!file) {
-        error = "cannot open map raster " + path;
-        return false;
-    }
+namespace {
 
+// Reads and validates the header from an already-open stream, so load() and
+// readHeader() cannot drift apart on what a valid file looks like.
+bool readHeaderFrom(std::istream& file, const std::string& path, MapRasterInfo& out,
+                    std::string& error) {
     char magic[8] = {};
     file.read(magic, sizeof(magic));
     if (!file || std::memcmp(magic, kMagic, sizeof(magic)) != 0) {
@@ -53,7 +52,6 @@ bool MapRaster::load(const std::string& path, MapRaster& out, std::string& error
         return false;
     }
 
-    MapRaster m;
     int32_t zoom = 0, tile_x = 0, tile_y = 0, tiles_x = 0, tiles_y = 0, width = 0, height = 0;
     if (!readRaw(file, zoom) || !readRaw(file, tile_x) || !readRaw(file, tile_y) ||
         !readRaw(file, tiles_x) || !readRaw(file, tiles_y) || !readRaw(file, width) ||
@@ -62,8 +60,8 @@ bool MapRaster::load(const std::string& path, MapRaster& out, std::string& error
         return false;
     }
 
-    // Bounds before allocating: a corrupt header must not be able to ask for
-    // an arbitrary amount of memory.
+    // Bounds before anything allocates: a corrupt header must not be able to
+    // ask for an arbitrary amount of memory.
     if (zoom < 1 || zoom > 24 || tiles_x < 1 || tiles_y < 1 || width < 1 || height < 1 ||
         width > 32768 || height > 32768) {
         error = path + ": implausible raster dimensions";
@@ -76,10 +74,57 @@ bool MapRaster::load(const std::string& path, MapRaster& out, std::string& error
         error = path + ": truncated attribution";
         return false;
     }
+
+    out.zoom = zoom;
+    out.tile_x = tile_x;
+    out.tile_y = tile_y;
+    out.tiles_x = tiles_x;
+    out.tiles_y = tiles_y;
+    out.width = width;
+    out.height = height;
     // The field is null-padded; stop at the first terminator rather than
     // carrying the padding into the HUD.
-    m.attribution_.assign(attribution.data(),
-                          strnlen(attribution.data(), kAttributionBytes));
+    out.attribution.assign(attribution.data(), strnlen(attribution.data(), kAttributionBytes));
+    return true;
+}
+
+}  // namespace
+
+double MapRasterInfo::northEdge() const {
+    return latForTileY(double(tile_y), std::pow(2.0, double(zoom)));
+}
+double MapRasterInfo::southEdge() const {
+    return latForTileY(double(tile_y + tiles_y), std::pow(2.0, double(zoom)));
+}
+double MapRasterInfo::westEdge() const {
+    return double(tile_x) / std::pow(2.0, double(zoom)) * 360.0 - 180.0;
+}
+double MapRasterInfo::eastEdge() const {
+    return double(tile_x + tiles_x) / std::pow(2.0, double(zoom)) * 360.0 - 180.0;
+}
+
+bool MapRaster::readHeader(const std::string& path, MapRasterInfo& out, std::string& error) {
+    std::ifstream file(path, std::ios::binary);
+    if (!file) {
+        error = "cannot open map raster " + path;
+        return false;
+    }
+    return readHeaderFrom(file, path, out, error);
+}
+
+bool MapRaster::load(const std::string& path, MapRaster& out, std::string& error) {
+    std::ifstream file(path, std::ios::binary);
+    if (!file) {
+        error = "cannot open map raster " + path;
+        return false;
+    }
+
+    MapRasterInfo info;
+    if (!readHeaderFrom(file, path, info, error)) return false;
+
+    MapRaster m;
+    const int32_t width = info.width, height = info.height;
+    m.attribution_ = info.attribution;
 
     const size_t bytes = size_t(width) * size_t(height) * 3;
     m.pixels_.resize(bytes);
@@ -89,11 +134,11 @@ bool MapRaster::load(const std::string& path, MapRaster& out, std::string& error
         return false;
     }
 
-    m.zoom_ = zoom;
-    m.tile_x_ = tile_x;
-    m.tile_y_ = tile_y;
-    m.tiles_x_ = tiles_x;
-    m.tiles_y_ = tiles_y;
+    m.zoom_ = info.zoom;
+    m.tile_x_ = info.tile_x;
+    m.tile_y_ = info.tile_y;
+    m.tiles_x_ = info.tiles_x;
+    m.tiles_y_ = info.tiles_y;
     m.width_ = width;
     m.height_ = height;
     out = std::move(m);

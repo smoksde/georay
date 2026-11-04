@@ -299,6 +299,34 @@ def read_route(path):
     return points
 
 
+def region_windows(south, west, north, east, window_m, overlap=0.75):
+    """Window centres tiling a bounding box.
+
+    For covering a whole region rather than a flight path. The overlap is the
+    same as the corridor's and for the same reason: georay holds one window
+    at a time, so without it the aircraft crosses a seam with nothing on
+    either side of it.
+
+    Overlapping raw windows do duplicate ground - about 1.8x at 0.75 - which
+    is the dominant cost of covering an area this way. It is the price of
+    being able to fly anywhere in it without a seam.
+    """
+    step_m = window_m * 2.0 * overlap
+    mid_lat = math.radians((south + north) * 0.5)
+    step_lat = step_m / 110574.0
+    step_lon = step_m / max(111320.0 * math.cos(mid_lat), 1.0)
+
+    centres = []
+    lat = south + step_lat * 0.5
+    while lat - step_lat * 0.5 < north:
+        lon = west + step_lon * 0.5
+        while lon - step_lon * 0.5 < east:
+            centres.append((lat, lon))
+            lon += step_lon
+        lat += step_lat
+    return centres
+
+
 def corridor_windows(points, window_m, overlap=0.75):
     """Window centres spaced along a route.
 
@@ -337,6 +365,34 @@ def corridor_windows(points, window_m, overlap=0.75):
     return centres
 
 
+def run_windows(centres, args, url, attribution_text, prefix):
+    """Fetch a list of window centres into args.out_dir."""
+    written = skipped = refused = 0
+    for i, (clat, clon) in enumerate(centres):
+        # The position is in the name, so a directory of windows is
+        # self-describing and a partial fetch can be resumed by re-running.
+        name = "%s%03d_%+.4f_%+.4f" % (prefix, i, clat, clon)
+        out = os.path.join(args.out_dir, name + ".map")
+        if os.path.exists(out) and not args.force:
+            skipped += 1
+            continue
+        print("[%d/%d] %s" % (i + 1, len(centres), name))
+        if fetch_window(clat, clon, args.window, args.zoom, url, attribution_text,
+                        args.cache, args.max_tiles, args.delay, args.max_pixels,
+                        out, args.dry_run, quiet=True) < 0:
+            refused += 1
+        else:
+            written += 1
+
+    print("\n%d written, %d already present, %d refused -> %s"
+          % (written, skipped, refused, args.out_dir))
+    if not args.dry_run and (written or skipped):
+        total = sum(os.path.getsize(os.path.join(args.out_dir, f))
+                    for f in os.listdir(args.out_dir) if f.endswith(".map"))
+        print("%s now holds %.2f GB" % (args.out_dir, total / 1e9))
+    return 0
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__,
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -371,7 +427,11 @@ def main():
     parser.add_argument("--window", type=float, default=1200.0,
                         help="half-extent of each corridor window in metres (default 1200)")
     parser.add_argument("--out-dir", default="data/windows",
-                        help="directory to write corridor windows into")
+                        help="directory to write corridor or region windows into")
+    parser.add_argument("--region", metavar="S,W,N,E",
+                        help="tile a bounding box with windows instead of fetching one "
+                             "square, e.g. --region 51.36,11.27,53.56,14.77 for Berlin "
+                             "and Brandenburg")
     args = parser.parse_args()
 
     # A source carries its own attribution. Overriding the URL without saying
@@ -385,6 +445,24 @@ def main():
     if not 1 <= args.zoom <= 19:
         raise SystemExit("--zoom must be between 1 and 19")
 
+    # --- a grid of windows over a region ---------------------------------
+    if args.region:
+        try:
+            south, west, north, east = (float(v) for v in args.region.split(","))
+        except ValueError:
+            raise SystemExit("--region wants S,W,N,E")
+        if not (north > south and east > west):
+            raise SystemExit("--region bounds are inverted")
+
+        centres = region_windows(south, west, north, east, args.window)
+        km_lat = (north - south) * 110.574
+        km_lon = (east - west) * 111.320 * math.cos(math.radians((south + north) * 0.5))
+        per_window = metres_per_pixel((south + north) * 0.5, args.zoom)
+        print("region %.0f x %.0f km -> %d window(s) of %.0f m half-extent at zoom %d "
+              "(%.1f m/px)" % (km_lon, km_lat, len(centres), args.window, args.zoom,
+                               per_window))
+        return run_windows(centres, args, url, attribution_text, "r")
+
     # --- a corridor along a flight plan ----------------------------------
     if args.along:
         points = read_route(args.along)
@@ -392,28 +470,7 @@ def main():
         print("%s: %d waypoints -> %d window(s) of %.0f m half-extent at zoom %d"
               % (args.along, len(points), len(centres), args.window, args.zoom))
 
-        written = skipped = refused = 0
-        for i, (clat, clon) in enumerate(centres):
-            name = "w%03d_%+.4f_%+.4f" % (i, clat, clon)
-            out = os.path.join(args.out_dir, name + ".map")
-            if os.path.exists(out) and not args.force:
-                skipped += 1
-                continue
-            print("[%d/%d] %s" % (i + 1, len(centres), name))
-            if fetch_window(clat, clon, args.window, args.zoom, url, attribution_text,
-                            args.cache, args.max_tiles, args.delay, args.max_pixels,
-                            out, args.dry_run) < 0:
-                refused += 1
-            else:
-                written += 1
-
-        print("\n%d written, %d already present, %d refused -> %s"
-              % (written, skipped, refused, args.out_dir))
-        if not args.dry_run and (written or skipped):
-            print("Now run:\n  ./build/georay --dem data/dem --map-satellite-dir %s \\\n"
-                  "      --origin %.4f,%.4f --mission %s"
-                  % (args.out_dir, points[0][0], points[0][1], args.along))
-        return 0
+        return run_windows(centres, args, url, attribution_text, "w")
 
     # --- a single square window ------------------------------------------
     try:
