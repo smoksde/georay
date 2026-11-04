@@ -9,16 +9,12 @@ namespace {
 glm::vec3 toFloat(const glm::dvec3& v) { return glm::vec3(float(v.x), float(v.y), float(v.z)); }
 
 // Ground overlays are drawn on the plane, not at the elevation they were
-// computed at.
-//
-// The ground renders flat, so anything placed at its true terrain height
-// disappears wherever that height is below the plane - which is most of a
-// city, since the plane sits at the frame origin's own elevation. The
-// footprint fill came out as four stray wedges before this: the parts that
-// happened to land on high ground.
-//
-// The elevation is not lost, it is reported as a number. What would be worse
-// is a shape that is half there.
+// computed at: the ground renders flat, so anything at its true terrain
+// height disappears wherever that height is below the plane - most of a
+// city, since the plane sits at the frame origin's elevation. (The
+// footprint fill came out as four stray wedges before this fix.) The
+// elevation is not lost - it's reported as a number - and a shape half
+// there would be worse.
 constexpr float kGroundLift = 0.8f;
 glm::vec3 onPlane(const glm::dvec3& v) {
     return glm::vec3(float(v.x), float(v.y), kGroundLift);
@@ -47,10 +43,6 @@ bool Scene::initialise() {
     return true;
 }
 
-
-
-
-
 void Scene::beginWorld(const glm::mat4& view_projection, const glm::vec3& eye,
                        GroundMode mode, bool dark, double world_per_pixel_per_metre) {
     eye_ = eye;
@@ -72,10 +64,9 @@ void Scene::addThickSegment(const glm::vec3& a, const glm::vec3& b, const glm::v
     if (length < 1e-4f) return;
     const glm::vec3 direction = along / length;
 
-    // Width and facing are computed per endpoint, not once at the midpoint.
-    // A single width taken from the middle makes a segment that spans depth -
-    // the aircraft four hundred metres up, the ground a kilometre out - come
-    // out wedge-shaped, wide at the near end and thin at the far one.
+    // Width and facing per endpoint, not once at the midpoint: a width taken
+    // from the middle of a segment spanning real depth (aircraft 400 m up,
+    // ground a km out) comes out wedge-shaped - wide near, thin far.
     auto ribbon = [&](const glm::vec3& point) {
         const glm::vec3 to_eye = eye_ - point;
         const float distance = glm::length(to_eye);
@@ -131,19 +122,17 @@ void Scene::beginOverlay(int width, int height) {
     overlay_projection_ = glm::ortho(0.0f, float(width), float(height), 0.0f, -1.0f, 1.0f);
 
     glDisable(GL_DEPTH_TEST);
-    // Back-face culling has to go too, not just the depth test. The overlay
-    // projection flips y (pixel coordinates run downwards, clip space runs
-    // up), which reverses the winding of every quad - so with culling on,
-    // panels and text are drawn and then thrown away, and the HUD is simply
-    // absent with no error anywhere.
+    // Culling has to go too: the overlay projection flips y (pixels run
+    // down, clip space runs up), reversing every quad's winding - with
+    // culling on, the HUD is silently drawn and discarded.
     glDisable(GL_CULL_FACE);
     glEnable(GL_BLEND);
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
 }
 
 void Scene::endOverlay() {
-    // Panels first, then lines, then text: each layer must sit on top of the
-    // previous one, and with the depth test off that is purely draw order.
+    // Panels, then lines, then text: with the depth test off, layering is
+    // purely draw order.
     line_shader_->bind();
     line_shader_->set("u_view_projection", overlay_projection_);
     overlay_fills_.flush();
@@ -159,7 +148,6 @@ void Scene::endOverlay() {
     glEnable(GL_DEPTH_TEST);
 }
 
-
 void Scene::addFrameAxes(double length_m) {
     const float l = float(length_m);
     const glm::vec3 o(0.0f, 0.0f, 0.0f);
@@ -170,10 +158,9 @@ void Scene::addFrameAxes(double length_m) {
 
 void Scene::addAircraft(const UavState& state, const EnuFrame& frame, const Terrain& terrain,
                         double size_m) {
-    // A recognisable plan-view airframe rather than a dot, because its
-    // orientation is half the input to the geolocation: if the model is
-    // yawed 180 degrees from what you intended, a cross tells you nothing
-    // and a fuselage tells you immediately.
+    // A recognisable plan-view airframe rather than a dot: orientation is
+    // half the input to geolocation, and a 180-degree yaw error shows
+    // immediately on a fuselage but not on a cross.
     const glm::dmat3 enu_from_body = rotationEnuFromNed() * rotationNedFromBody(state.attitude);
     const glm::dvec3 centre = frame.fromGeodetic(state.position);
 
@@ -190,9 +177,9 @@ void Scene::addAircraft(const UavState& state, const EnuFrame& frame, const Terr
     world_lines_.addSegment(body(0.1, -1.0, 0), body(0.0, -1.0, 0.1), c);
     world_lines_.addSegment(body(0.1, 1.0, 0), body(0.0, 1.0, 0.1), c);
 
-    // A plumb line down to the ground directly below, and a ring where it
-    // lands: together they pin the aircraft's horizontal position against the
-    // grid, which perspective alone leaves ambiguous.
+    // A plumb line to the ground and a ring where it lands, pinning the
+    // aircraft's horizontal position against the grid - ambiguous in
+    // perspective alone.
     const glm::dvec3 camera = cameraPositionEnu(state, frame);
     const glm::vec3 above = toFloat(camera);
     const glm::vec3 below(above.x, above.y, kGroundLift);
@@ -216,11 +203,10 @@ void Scene::addCameraFrustum(const UavState& state, const CameraModel& camera,
         if (grounded[i]) {
             far_corner[i] = toFloat(footprint.corners[i].ground_enu);
         } else {
-            // A corner ray that found no ground still has to be drawn, or the
-            // frustum silently loses an edge exactly when the view is partly
-            // off the map - which is when you most need to see it. The end
-            // point is an arbitrary distance along the ray, though, not a
-            // place, so it must not be drawn as one.
+            // A corner ray with no ground still has to be drawn, or the
+            // frustum loses an edge exactly when the view is partly off the
+            // map. The endpoint is an arbitrary distance along the ray, not
+            // a place, so it must not be drawn as one.
             const glm::dvec3 dir =
                 glm::normalize(enu_from_optical * camera.pixelToRay(corners[i]));
             far_corner[i] = toFloat(apex + dir * fallback_length_m);
@@ -234,11 +220,9 @@ void Scene::addCameraFrustum(const UavState& state, const CameraModel& camera,
         // four converge on the aircraft.
         addThickSegment(apex_f, far_corner[i], colours::frustum, 2.0f);
 
-        // The far edge is only a real footprint edge when both of its ends
-        // are on the ground. Joining a ground hit to a cut-off ray draws a
-        // long line across the scene that looks exactly like an edge of the
-        // imaged area and is nothing of the kind - so it is drawn faint, as
-        // the construction line it is.
+        // Only a real footprint edge when both ends are on the ground -
+        // joining a hit to a cut-off ray would look like an edge and isn't
+        // one, so it's drawn faint as the construction line it is.
         const int j = (i + 1) % 4;
         const bool real_edge = grounded[i] && grounded[j];
         if (real_edge) {
@@ -248,19 +232,18 @@ void Scene::addCameraFrustum(const UavState& state, const CameraModel& camera,
         }
     }
 
-    // Boresight: the centre pixel's ray, which is the one a user instinctively
-    // reads as "where the camera is pointing".
+    // Boresight: the centre pixel's ray, read instinctively as "where the
+    // camera is pointing".
     const glm::dvec3 boresight = boresightEnu(state);
     addThickSegment(apex_f, toFloat(apex + boresight * fallback_length_m * 0.35),
                     colours::boresight, 1.8f);
 }
 
 void Scene::addFootprint(const Footprint& footprint, const Terrain& terrain) {
-    // Walk the samples in order and draw a segment only between neighbours
-    // that both found ground. Chaining the valid points into one polyline
-    // instead would connect samples that are not adjacent - drawing long
-    // straight lines across the gap, which look exactly like a footprint
-    // edge and are not one.
+    // Draw a segment only between neighbours that both found ground.
+    // Chaining all valid points into one polyline instead would connect
+    // non-adjacent samples with a line across the gap that looks like an
+    // edge and isn't one.
     std::vector<glm::vec3> run;
     auto emit = [&]() {
         if (run.size() >= 2) addThickPolyline(run, colours::footprint, 3.0f, false);
@@ -275,8 +258,7 @@ void Scene::addFootprint(const Footprint& footprint, const Terrain& terrain) {
         run.push_back(onPlane(sample.enu));
     }
 
-    // Only close the ring when every sample found ground; otherwise the
-    // closing segment would be another line that is not a footprint edge.
+    // Close the ring only when every sample found ground.
     if (footprint.complete && run.size() >= 3) {
         addThickPolyline(run, colours::footprint, 3.0f, true);
         run.clear();
@@ -290,8 +272,8 @@ void Scene::addPickRay(const GeolocateResult& result, const Terrain& terrain,
     const glm::vec3 origin = toFloat(result.ray_origin_enu);
 
     if (!result.valid) {
-        // Draw the ray anyway, fading out: a ray that found nothing is still
-        // the most useful thing on screen for working out why.
+        // Draw the ray anyway, fading out - still the most useful thing on
+        // screen for working out why it found nothing.
         const glm::vec3 end = toFloat(result.ray_origin_enu +
                                       result.ray_direction_enu * miss_length_m);
         world_lines_.addSegment(origin, end, colours::pick_ray,
@@ -302,8 +284,8 @@ void Scene::addPickRay(const GeolocateResult& result, const Terrain& terrain,
     addThickSegment(origin, onPlane(result.ground_enu), colours::pick_ray, 2.5f);
     addGroundMarker(result.ground_enu, colours::pick_hit, marker_size_m);
 
-    // A vertical drop line from the hit up to the aircraft's altitude, so the
-    // hit's position on the ground can be read off against the grid.
+    // A vertical drop line to the aircraft's altitude, so the hit reads off
+    // against the grid.
     const glm::vec3 hit = onPlane(result.ground_enu);
     world_lines_.addSegment(hit, glm::vec3(hit.x, hit.y, float(result.ray_origin_enu.z)),
                             glm::vec4(glm::vec3(colours::pick_hit), 0.55f),
@@ -316,8 +298,8 @@ void Scene::addMissionRoute(const std::vector<glm::dvec3>& route_enu, int curren
     if (route_enu.empty()) return;
 
     for (size_t i = 0; i + 1 < route_enu.size(); ++i) {
-        // The leg being flown is highlighted, so the HUD's "waypoint 3 of 7"
-        // has something to point at.
+        // The leg being flown is highlighted, giving "waypoint 3 of 7"
+        // something to point at.
         const glm::vec4 colour = (int(i) == current_leg) ? colours::route_active : colours::route;
         world_lines_.addSegment(toFloat(route_enu[i]), toFloat(route_enu[i + 1]), colour);
     }
@@ -327,24 +309,22 @@ void Scene::addMissionRoute(const std::vector<glm::dvec3>& route_enu, int curren
         const double ground = terrain.sampleHeight(route_enu[i].x, route_enu[i].y);
         const glm::vec3 below(p.x, p.y, float(ground));
 
-        // A plumb line down to the ground, and a ring where it lands: a
-        // waypoint drawn as a dot in mid-air gives no sense of its height,
-        // which is the number most often wrong in a plan.
+        // A plumb line and a ring where it lands - a dot in mid-air gives no
+        // sense of height, the number most often wrong in a plan.
         world_lines_.addSegment(p, below, glm::vec4(glm::vec3(colours::waypoint), 0.55f),
                                 glm::vec4(glm::vec3(colours::waypoint), 0.1f));
         world_lines_.addCircleXY(below + glm::vec3(0, 0, 0.5f), 12.0f,
                                  glm::vec4(glm::vec3(colours::waypoint), 0.45f), 20);
 
-        // A box at the waypoint itself, sized so it stays visible from the
-        // default viewing distance.
+        // A box at the waypoint, sized to stay visible from the default
+        // viewing distance.
         world_lines_.addBox(p, glm::vec3(10.0f), colours::waypoint);
     }
 }
 
 void Scene::addFootprintFill(const Footprint& footprint, const glm::vec4& colour) {
-    // Only a complete outline encloses an area. Filling a partial one would
-    // shade a polygon that is not the footprint, which is exactly the lie the
-    // outline code already refuses to tell.
+    // Only a complete outline encloses an area; filling a partial one would
+    // shade a polygon that isn't the footprint.
     if (!footprint.complete || footprint.outline.size() < 3) return;
 
     glm::dvec3 centroid(0.0);
@@ -357,9 +337,9 @@ void Scene::addFootprintFill(const Footprint& footprint, const glm::vec4& colour
     if (count < 3) return;
     centroid /= double(count);
 
-    // A fan from the centroid. The footprint is convex enough for this at
-    // any realistic camera angle, and a general tessellator would be a lot
-    // of machinery for a quadrilateral with rounded edges.
+    // A fan from the centroid - the footprint is convex enough for this at
+    // any realistic angle, and a general tessellator is too much machinery
+    // for a quadrilateral with rounded edges.
     for (size_t i = 0; i < footprint.outline.size(); ++i) {
         const glm::dvec3& a = footprint.outline[i].enu;
         const glm::dvec3& b = footprint.outline[(i + 1) % footprint.outline.size()].enu;
@@ -370,9 +350,9 @@ void Scene::addFootprintFill(const Footprint& footprint, const glm::vec4& colour
 void Scene::addGroundMarker(const glm::dvec3& enu, const glm::vec4& colour, double size_m) {
     const glm::vec3 p = onPlane(enu);
     const float s = float(size_m);
-    // A ring on the ground plus a vertical stalk: the ring says where on the
-    // surface, the stalk makes it visible from a shallow angle where a flat
-    // ring collapses to a line.
+    // A ring plus a vertical stalk: the ring says where on the surface, the
+    // stalk keeps it visible at a shallow angle where a flat ring collapses
+    // to a line.
     world_lines_.addCircleXY(p, s, colour, 32);
     world_lines_.addSegment(p, p + glm::vec3(0, 0, s * 1.6f), colour,
                             glm::vec4(glm::vec3(colour), 0.0f));
