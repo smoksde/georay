@@ -5,10 +5,8 @@
 //   world pass   - the terrain surface plus 3D overlay lines, in ENU metres
 //   overlay pass - HUD text and panels, in window pixels
 //
-// The app decides *what* to draw; this decides *how*. Keeping the split means
-// the geolocation code and the drawing code never appear in the same
-// function, which is what stops "it looks right" from substituting for "it
-// is right".
+// The app decides *what* to draw; this decides *how* - so geolocation code
+// and drawing code never share a function.
 
 #include <memory>
 #include <string>
@@ -71,12 +69,10 @@ public:
     const GroundChunks& ground() const { return ground_; }
 
     // --- world pass -------------------------------------------------------
-    // `map_layer` selects which raster to drape, or -1 for none.
-    // `imagery` tells the shader whether that layer is a photograph or a
-    // drawn map, which changes how much shading and contouring it gets.
-    // `world_per_pixel_per_metre` converts a screen width in pixels into a
-    // world width at a given distance, which is what lets the overlay lines
-    // keep a constant thickness on screen. Pass 2*tan(fov/2)/viewport_height.
+    // `mode` selects map/satellite/height-map shading, `dark` its tone
+    // mapping. `world_per_pixel_per_metre` converts a screen width in pixels
+    // into a world width at a given distance, for overlay lines of constant
+    // screen thickness - pass 2*tan(fov/2)/viewport_height.
     void beginWorld(const glm::mat4& view_projection, const glm::vec3& eye_position,
                     GroundMode mode, bool dark, double world_per_pixel_per_metre);
     // Draws every resident ground chunk.
@@ -84,11 +80,9 @@ public:
     PrimitiveBatch& world() { return world_lines_; }
 
     // A segment drawn as a camera-facing ribbon of constant screen width.
-    //
-    // GL_LINES cannot be widened in a core profile - glLineWidth above 1 is
-    // not required to do anything, and on most drivers does not - so a line
-    // that has to stay visible from ten kilometres has to be geometry. These
-    // go in the fill batch, under the thin lines.
+    // GL_LINES cannot be widened in a core profile (glLineWidth above 1 is
+    // not required to work, and on most drivers does not), so a line that
+    // must stay visible from ten kilometres has to be geometry.
     void addThickSegment(const glm::vec3& a, const glm::vec3& b, const glm::vec4& colour,
                          float width_px);
     void addThickPolyline(const std::vector<glm::vec3>& points, const glm::vec4& colour,
@@ -107,14 +101,14 @@ public:
     // because they are about the simulation's geometry rather than about GL.
 
     void addFrameAxes(double length_m);
-    // `terrain` is only used to drop a plumb line to the ground beneath the
+    // `terrain` is only used for a plumb line to the ground beneath the
     // aircraft, which is what makes its horizontal position readable in a
-    // perspective view - without it, altitude and distance cannot be
-    // separated by eye.
+    // perspective view - altitude and distance are otherwise indistinguishable
+    // by eye.
     void addAircraft(const UavState& state, const EnuFrame& frame, const Terrain& terrain,
                      double size_m);
-    // The camera frustum, drawn out to where its corner rays meet the ground
-    // (or to a fixed length for the corners that miss).
+    // The camera frustum, out to where its corner rays meet the ground (or a
+    // fixed length for corners that miss).
     void addCameraFrustum(const UavState& state, const CameraModel& camera,
                           const EnuFrame& frame, const Footprint& footprint,
                           double fallback_length_m);
@@ -125,10 +119,9 @@ public:
                     double miss_length_m, double marker_size_m = 25.0);
     void addGroundMarker(const glm::dvec3& enu, const glm::vec4& colour, double size_m);
 
-    // A loaded flight plan: the legs, the waypoints, and a plumb line from
-    // each down to the ground. The plumb lines are the point - a waypoint's
-    // altitude is the thing most often wrong in a plan, and a route drawn
-    // without them tells you nothing about height.
+    // A loaded flight plan: legs, waypoints, and a plumb line from each to
+    // the ground - altitude is what's most often wrong in a plan, and a
+    // route without the plumb lines says nothing about height.
     void addMissionRoute(const std::vector<glm::dvec3>& route_enu, int current_leg,
                          const Terrain& terrain);
 
@@ -148,9 +141,9 @@ private:
     TextRenderer text_;
 
     glm::mat4 overlay_projection_{1.0f};
-    // Remembered between beginWorld() and endWorld() so the line shader can
-    // be given the same transform the terrain was drawn with, without the
-    // caller having to pass it twice and risk passing two different ones.
+    // Remembered between beginWorld() and endWorld() so the line shader gets
+    // the same transform the terrain was drawn with, without the caller
+    // risking two different ones.
     glm::mat4 pending_view_projection_{1.0f};
     glm::vec3 eye_{0.0f};
     double world_per_pixel_per_metre_ = 0.0;

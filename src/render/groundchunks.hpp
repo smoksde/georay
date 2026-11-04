@@ -1,20 +1,18 @@
 #pragma once
 
 // The ground, as a grid of chunks loaded around wherever the camera is
-// looking - the same idea as a voxel game streaming terrain in, and for the
-// same reason: you can see a few kilometres, the world is a few hundred, and
-// only the difference needs to exist at any moment.
+// looking - the same idea as a voxel game streaming terrain in: you can see
+// a few km, the world is a few hundred, and only the difference needs to
+// exist at any moment.
 //
-// Chunks are flat. That is what makes this tractable at all: a chunk is two
-// triangles and one texture rather than a patch of heightfield with its own
-// seams, normals and level of detail. Relief has not been thrown away - the
-// Terrain is still what rays are intersected against, and the height-map mode
-// shows it as colour and contour lines - it has only stopped being geometry.
-// Draping a map over relief distorts it exactly where it is most worth
-// reading, and a map you cannot read is not worth the parallax.
+// Chunks are flat: two triangles and one texture, not a heightfield patch
+// with its own seams and LOD. Relief is not thrown away - Terrain is still
+// what rays are intersected against, and the height-map mode shows it as
+// colour and contours - it has only stopped being geometry, since draping a
+// map over relief distorts it exactly where it is most worth reading.
 //
 // A chunk's identity is a block of slippy tiles at a zoom, so it lines up
-// with the tile grid it is filled from, and changing zoom simply changes
+// with the tile grid it is filled from, and changing zoom just changes
 // which chunks exist.
 
 #include <map>
@@ -43,9 +41,9 @@ const char* groundModeName(GroundMode mode);
 
 class GroundChunks {
 public:
-    // Tiles per chunk edge. Four gives a 1024-pixel texture at native tile
-    // resolution: big enough that the per-chunk overhead is irrelevant, small
-    // enough that one arriving does not stall a frame.
+    // Tiles per chunk edge: a 1024-pixel texture at native tile resolution,
+    // big enough that per-chunk overhead is irrelevant, small enough that
+    // one arriving does not stall a frame.
     static constexpr int kTilesPerChunk = 4;
 
     GroundChunks();
@@ -62,13 +60,11 @@ public:
     const TileSource* activeSource() const;
 
     // Decides what should be resident from where the camera is looking,
-    // builds what is missing, and drops what is no longer near. Call once a
-    // frame; it does a bounded amount of work per call so a big view change
-    // costs several frames rather than one long stall.
-    // `dem` may be null, in which case the height-map mode falls back to the
-    // resampled terrain window - which is bounded, so the ground goes flat
-    // outside it. With a DEM it streams its own tiles and the height map
-    // reaches as far as the other two modes.
+    // builds what is missing, drops what is no longer near. Call once a
+    // frame; bounded work per call, so a big view change costs several
+    // frames rather than one stall. `dem` may be null, in which case the
+    // height-map mode falls back to the (bounded) resampled terrain window
+    // instead of streaming its own tiles as far as the other two modes do.
     void update(const ViewCamera& camera, const EnuFrame& frame, const Terrain& terrain,
                 const DemSource* dem, const GeoidModel& geoid, TileCache& cache,
                 TileFetcher* fetcher, double max_ground_radius_m);
@@ -95,11 +91,10 @@ private:
         bool has_texture = false;
         bool complete = false;   // every tile it wanted was present
         double last_used = 0.0;
-        // The fetcher's delivered count when this chunk was last skinned.
-        // An incomplete chunk is only worth rebuilding once more tiles have
-        // actually arrived; retrying every frame starves the creation of new
-        // chunks, which is how a view ends up with a patch of ground in the
-        // middle and nothing around it.
+        // The fetcher's delivered count when this chunk was last skinned. An
+        // incomplete chunk is only worth rebuilding once more tiles arrive -
+        // retrying every frame starves new-chunk creation, leaving a patch
+        // of ground with nothing around it.
         int built_at_delivery = -1;
     };
 

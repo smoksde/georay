@@ -9,26 +9,24 @@ namespace georay {
 namespace {
 
 // How finely a chunk's quad is subdivided. A chunk is a rectangle in
-// Mercator and a slightly curved patch in the local tangent plane, so two
-// triangles would put the map a metre or two out at the corners. Eight by
-// eight costs nothing and removes it.
+// Mercator but a slightly curved patch in the local tangent plane, so two
+// triangles put the map a metre or two out at the corners; 8x8 removes that
+// for free.
 constexpr int kChunkGrid = 8;
 
-// Texture size for the generated height map. Lower than the tile-backed
-// modes because it is sampled from a DEM whose posts are 30 m apart - more
-// pixels would only interpolate the same data more smoothly.
+// Texture size for the generated height map - lower than the tile-backed
+// modes since it samples a DEM whose posts are 30 m apart, so more pixels
+// would only interpolate the same data more smoothly.
 constexpr int kHeightTexture = 512;
 
-// At most this many chunks built per update. A large view change otherwise
-// decodes several hundred tiles in one frame, which stalls visibly; spread
-// over a few frames it is not noticeable.
+// Chunks built per update. Unbudgeted, a large view change decodes hundreds
+// of tiles in one frame and stalls visibly; spread over a few it is not.
 constexpr int kBuildsPerUpdate = 3;
 
 glm::vec3 toFloat(const glm::dvec3& v) { return glm::vec3(float(v.x), float(v.y), float(v.z)); }
 
-// Hypsometric tint: the map-like elevation ramp, not a photographic one. The
-// question this tool answers is "which point on the ground is this", and
-// distinguishable bands make a height readable straight off the surface.
+// Hypsometric tint, not a photographic one: distinguishable bands make a
+// height readable straight off the surface.
 void elevationColour(double t, unsigned char* rgb) {
     const double stops[5][3] = {
         {0.21, 0.33, 0.20}, {0.45, 0.47, 0.26}, {0.55, 0.42, 0.28},
@@ -65,9 +63,8 @@ GroundChunks::~GroundChunks() {
 void GroundChunks::setMode(GroundMode mode) {
     if (mode == mode_) return;
     mode_ = mode;
-    // Every chunk's skin is now wrong. The geometry would survive, but the
-    // textures are the expensive part anyway and keeping half a chunk alive
-    // is not worth the bookkeeping.
+    // Every chunk's skin is now wrong, and the texture is the expensive
+    // part anyway - not worth keeping the geometry alive separately.
     for (auto& entry : chunks_) {
         if (entry.second->texture) glDeleteTextures(1, &entry.second->texture);
     }
@@ -115,17 +112,16 @@ void GroundChunks::buildMesh(Chunk& chunk, const EnuFrame& frame) const {
         for (int ix = 0; ix <= kChunkGrid; ++ix) {
             const double u = double(ix) / kChunkGrid;
             const double v = double(iy) / kChunkGrid;
-            // Interpolate in Mercator, not in latitude: the two differ by
-            // more than a metre across a chunk, and the texture is laid out
-            // in the former.
+            // Interpolate in Mercator, not latitude: they differ by more
+            // than a metre across a chunk, and the texture is laid out in
+            // Mercator.
             const double lon = chunk.box.west() + (chunk.box.east() - chunk.box.west()) * u;
             const double north_y = mercatorTile(chunk.box.north(), lon, 20).y;
             const double south_y = mercatorTile(chunk.box.south(), lon, 20).y;
             const double lat = mercatorLatitude(north_y + (south_y - north_y) * v, 20);
 
-            // Flat: the ground plane sits at the frame origin's own
-            // elevation, so heights reported in the HUD stay relative to
-            // something the viewer can see.
+            // Flat: the plane sits at the frame origin's own elevation, so
+            // HUD heights stay relative to something the viewer can see.
             const glm::dvec3 enu = frame.fromGeodetic(Geodetic(lat, lon, 0.0));
             SurfaceVertex vertex;
             vertex.position = glm::vec3(float(enu.x), float(enu.y), 0.0f);
@@ -140,10 +136,9 @@ void GroundChunks::buildMesh(Chunk& chunk, const EnuFrame& frame) const {
             const unsigned int b = a + 1;
             const unsigned int c = a + unsigned(kChunkGrid + 1);
             const unsigned int d = c + 1;
-            // Counter-clockwise seen from above, which needs the opposite
-            // order to the obvious one: the texture's v runs south while
-            // ENU's y runs north, so a grid wound in texture order comes out
-            // facing downwards and is culled away entirely.
+            // Opposite winding to the obvious order: texture v runs south
+            // while ENU y runs north, so a grid wound in texture order faces
+            // down and is culled away entirely.
             indices.insert(indices.end(), {a, d, b, a, c, d});
         }
     }
@@ -158,8 +153,8 @@ bool GroundChunks::buildTileTexture(Chunk& chunk, TileCache& cache, TileFetcher*
         stitcher_.build(cache, *source, chunk.box, chunk.zoom,
                         kTilesPerChunk * DecodedTile::kSize);
 
-    // Ask for whatever was missing, whether or not anything was drawable:
-    // that is how a chunk the camera is looking at gets filled in.
+    // Ask for whatever was missing regardless of whether anything is
+    // drawable yet - how a chunk the camera is looking at gets filled in.
     if (fetcher) {
         for (const auto& tile : result.missing) {
             fetcher->request(*source, result.zoom, tile.first, tile.second);
@@ -193,32 +188,29 @@ bool GroundChunks::buildHeightTexture(Chunk& chunk, const EnuFrame& frame,
                                       const GeoidModel& geoid) {
     std::vector<unsigned char> rgb(size_t(kHeightTexture) * kHeightTexture * 3, 0);
 
-    // The ramp spans the loaded scene's own relief rather than this chunk's,
-    // so neighbouring chunks agree about what a colour means. A chunk outside
-    // that range clamps, which reads as "off the top of the scale" and is the
-    // honest answer.
+    // The ramp spans the loaded scene's own relief, not this chunk's, so
+    // neighbouring chunks agree what a colour means; a chunk outside that
+    // range clamps, reading honestly as "off the top of the scale".
     const double low = terrain.minHeight();
     const double span = std::max(terrain.maxHeight() - terrain.minHeight(), 10.0);
 
     // Contours every 10 m up to 200 m of relief, then coarser, so a flat
-    // plain and an alpine valley both end up with a readable number of lines
-    // rather than one or a thousand.
+    // plain and an alpine valley both get a readable number of lines.
     const double interval = span < 200.0 ? 10.0 : (span < 1000.0 ? 50.0 : 200.0);
 
-    // Metres of ground per texel, needed to keep a contour about a pixel wide
+    // Metres of ground per texel, to keep a contour about a pixel wide
     // whatever the slope.
     const double chunk_m =
         (chunk.box.north() - chunk.box.south()) * 110574.0;
     const double metres_per_texel = std::max(chunk_m / kHeightTexture, 0.01);
 
-    // Sampling the DEM directly rather than the resampled terrain window:
-    // the window is bounded and the camera is not, so going through it would
-    // make the height map go flat exactly where the other modes keep going.
+    // The DEM directly, not the resampled terrain window: the window is
+    // bounded and the camera is not, so going through it would flatten the
+    // height map exactly where the other modes keep going.
     auto heightAt = [&](double lat, double lon) {
         double orthometric = 0.0;
         if (dem && dem->sampleOrthometric(lat, lon, orthometric)) {
-            // Ellipsoidal, to match what the terrain window holds and what
-            // the HUD reports.
+            // Ellipsoidal, matching the terrain window and the HUD.
             return geoid.toEllipsoidal(lat, lon, orthometric) - frame.origin().altitude_m;
         }
         const glm::dvec3 enu = frame.fromGeodetic(Geodetic(lat, lon, 0.0));
@@ -238,11 +230,9 @@ bool GroundChunks::buildHeightTexture(Chunk& chunk, const EnuFrame& frame,
             unsigned char* pixel = rgb.data() + (size_t(row) * kHeightTexture + col) * 3;
             elevationColour((height - low) / span, pixel);
 
-            // A contour where the height is within half a texel's worth of
-            // climb of a multiple of the interval. Expressed that way the
-            // line stays about one pixel wide on a cliff and on a plain
-            // alike; a fixed elevation tolerance would be a hairline on one
-            // and a wide band on the other.
+            // A contour where height is within half a texel's climb of an
+            // interval multiple - stays about one pixel wide on a cliff and
+            // a plain alike, where a fixed elevation tolerance would not.
             const double step_m = 20.0;
             const double east_step = heightAt(lat, lon + step_m / 74000.0) - height;
             const double north_step = heightAt(lat + step_m / 110574.0, lon) - height;
@@ -306,14 +296,11 @@ void GroundChunks::update(const ViewCamera& camera, const EnuFrame& frame,
                           double max_ground_radius_m) {
     clock_ += 1.0;
 
-    // What the camera can see on the ground, as a radius about where it is
-    // looking. The chunks to have resident are the ones inside it - the whole
-    // of the streaming decision, in one number.
-    //
-    // Two and a half times the orbit distance, not one: a camera looking down
-    // at a shallow angle sees far more ground than it is standing off by, and
-    // sizing the radius to the distance alone leaves the far half of the view
-    // empty.
+    // What the camera can see, as a radius about where it is looking - the
+    // chunks to keep resident are the ones inside it, the whole streaming
+    // decision in one number. 2.5x the orbit distance rather than 1x: a
+    // shallow viewing angle sees far more ground than its standoff distance,
+    // and sizing to distance alone leaves the far half of the view empty.
     const double view_radius =
         std::min(std::max(double(camera.distance()) * 2.5, 600.0), max_ground_radius_m);
 
@@ -330,20 +317,17 @@ void GroundChunks::update(const ViewCamera& camera, const EnuFrame& frame,
     zoom_ = zoomNearest(centre.latitude_deg, std::max(screen_mpp, 0.05), min_zoom, max_zoom);
     metres_per_pixel_ = mercatorMetresPerPixel(centre.latitude_deg, zoom_);
 
-    // Chunk coordinates of the view centre, and how many of them the radius
-    // reaches. A chunk covers kTilesPerChunk tiles, so its size in metres
-    // falls as the zoom rises - which is what keeps the resident count
-    // roughly constant however far out the camera is.
+    // Chunk coordinates of the view centre, and how many the radius reaches.
+    // A chunk's size in metres falls as zoom rises, which keeps the resident
+    // count roughly constant at any distance.
     const double chunk_m = metres_per_pixel_ * DecodedTile::kSize * kTilesPerChunk;
     const glm::dvec2 centre_tile =
         mercatorTile(centre.latitude_deg, centre.longitude_deg, zoom_);
     const int centre_cx = int(std::floor(centre_tile.x / kTilesPerChunk));
     const int centre_cy = int(std::floor(centre_tile.y / kTilesPerChunk));
-    // Capped at three rings - a seven by seven grid - because the resident
-    // count is what costs memory: at 1024 pixels square a chunk is 3 MB, so
-    // 49 of them is about 150 MB and 121 would not be affordable. Beyond this
-    // the honest answer is coarser chunks further out, which is a quadtree
-    // and a different piece of work.
+    // Capped at three rings (7x7): at 3 MB per chunk, 49 is ~150 MB and 121
+    // would not be affordable. Coarser chunks further out would need a
+    // quadtree - a different piece of work.
     const int reach = std::min(3, std::max(1, int(std::ceil(view_radius / chunk_m))));
 
     // Nearest first, so what the viewer is looking at arrives before the rim.
@@ -359,10 +343,10 @@ void GroundChunks::update(const ViewCamera& camera, const EnuFrame& frame,
     const int tiles_total = int(std::pow(2.0, double(zoom_)));
     const int chunks_total = std::max(1, tiles_total / kTilesPerChunk);
 
-    // New chunks and retries get separate budgets. Sharing one lets a view
-    // full of half-covered chunks spend every frame retrying them and never
-    // create the ones beyond, which leaves a patch of ground surrounded by
-    // nothing however long you wait.
+    // New chunks and retries get separate budgets - sharing one lets a view
+    // full of half-covered chunks spend every frame retrying and never
+    // create the ones beyond, leaving a patch of ground surrounded by
+    // nothing no matter how long you wait.
     const int delivered = fetcher ? fetcher->fetched() : 0;
     int built = 0, retried = 0;
     for (const auto& entry : wanted) {
@@ -374,9 +358,9 @@ void GroundChunks::update(const ViewCamera& camera, const EnuFrame& frame,
         if (found != chunks_.end()) {
             Chunk& chunk = *found->second;
             chunk.last_used = clock_;
-            // Only worth rebuilding if tiles have actually arrived since the
-            // last attempt. Offline, that is never, and the chunk is left as
-            // the partial picture it is.
+            // Only worth rebuilding if tiles arrived since the last attempt
+            // - offline, that's never, and the chunk stays the partial
+            // picture it is.
             const bool worth_retrying =
                 !chunk.complete && fetcher && delivered != chunk.built_at_delivery;
             if (worth_retrying && retried < 1) {
@@ -409,8 +393,8 @@ void GroundChunks::update(const ViewCamera& camera, const EnuFrame& frame,
         chunks_[id] = std::move(chunk);
     }
 
-    // Drop whatever is now furthest from the view, and anything left over at
-    // a zoom that is no longer current.
+    // Drop whatever is furthest from the view now, plus anything left at a
+    // zoom that is no longer current.
     for (auto it = chunks_.begin(); it != chunks_.end();) {
         if (it->second->zoom != zoom_) {
             if (it->second->texture) glDeleteTextures(1, &it->second->texture);
