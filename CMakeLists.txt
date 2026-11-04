@@ -114,6 +114,12 @@ add_executable(georay
     src/app_render.cpp
     src/flight.cpp
     src/selftest.cpp
+    src/selftest_support.cpp
+    src/selftest_geodetic.cpp
+    src/selftest_geolocate.cpp
+    src/selftest_dem.cpp
+    src/selftest_streaming.cpp
+    src/selftest_formats.cpp
     src/gl/shader.cpp
     src/gl/mesh.cpp
     src/gl/text.cpp
