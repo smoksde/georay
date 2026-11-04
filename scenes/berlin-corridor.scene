@@ -9,7 +9,7 @@
 # Fetch it with:
 #   scripts/fetch_dem.py --origin 52.5163,13.3777 --extent 2000
 #   scripts/fetch_map.py --along missions/berlin-survey.plan --window 900 \
-#       --zoom 17 --source esri --max-tiles 400 --out-dir data/windows
+#       --zoom 17 --source esri --max-tiles 400
 
 name              BERLIN - STREAMED CORRIDOR
 origin            52.5163,13.3777

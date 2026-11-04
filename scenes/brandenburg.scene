@@ -13,8 +13,8 @@
 #
 # Fetch it with:
 #   scripts/fetch_dem.py --origin 52.46,13.02 --extent 125000
-#   scripts/fetch_map.py --region 51.36,11.27,53.56,14.77 --window 20000 \
-#       --zoom 12 --source basemapde --max-tiles 200 --out-dir data/berlin_brandenburg
+#   scripts/fetch_map.py --region 51.36,11.27,53.56,14.77 --zoom 12 \
+#       --source basemapde --max-tiles 3000
 
 name              BERLIN + BRANDENBURG
 origin            52.5163,13.3777

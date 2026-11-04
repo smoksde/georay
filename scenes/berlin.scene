@@ -7,8 +7,7 @@
 #
 # Fetch the data first:
 #   scripts/fetch_dem.py --origin 52.5163,13.3777 --extent 2000
-#   scripts/fetch_map.py --origin 52.5163,13.3777 --extent 2000 --zoom 16 \
-#       --out data/berlin.map
+#   scripts/fetch_map.py  (optional - --online fetches tiles as needed)
 
 name              BERLIN - BRANDENBURG GATE
 origin            52.5163,13.3777

@@ -51,8 +51,7 @@ void printUsage() {
         "\n"
         "Fetch data for a scene with:\n"
         "  scripts/fetch_dem.py --origin 52.5163,13.3777 --extent 2000\n"
-        "  scripts/fetch_map.py --origin 52.5163,13.3777 --extent 2000 "
-        "--out data/berlin.map\n"
+        "  scripts/fetch_map.py --origin 52.5163,13.3777 --extent 2000 --zoom 17\n"
         "  ./build/georay --scene berlin\n"
         "\n"
         "  georay --help                 this message\n";
@@ -240,10 +239,8 @@ int main(int argc, char** argv) {
                          "        For real terrain and satellite imagery:\n"
                          "          scripts/fetch_dem.py --origin 52.5163,13.3777 "
                          "--extent 1200\n"
-                         "          scripts/fetch_map.py --source esri "
-                         "--origin 52.5163,13.3777 \\\n"
-                         "              --extent 1200 --zoom 18 --max-tiles 800 "
-                         "--out data/berlin_sat.map\n"
+                         "        or just add --online and georay will fetch the map "
+                         "itself.\n"
                       << std::flush;
         }
     }
