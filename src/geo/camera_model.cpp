@@ -83,11 +83,9 @@ glm::dvec2 CameraModel::distort(const glm::dvec2& n) const {
 glm::dvec2 CameraModel::undistort(const glm::dvec2& distorted) const {
     if (distortion_.isIdentity()) return distorted;
 
-    // The Brown-Conrady model has no closed-form inverse, so invert it by
-    // fixed-point iteration: guess the undistorted point, see where the
-    // forward model puts it, and correct by the residual. Converges in a
-    // handful of steps for sane coefficients; the iteration cap is what
-    // keeps a pathological calibration from hanging the picker.
+    // Brown-Conrady has no closed-form inverse: fixed-point iteration,
+    // guessing the undistorted point and correcting by the forward model's
+    // residual. The cap keeps a pathological calibration from hanging.
     glm::dvec2 guess = distorted;
     for (int i = 0; i < 20; ++i) {
         const glm::dvec2 residual = distort(guess) - distorted;
@@ -124,11 +122,10 @@ std::array<glm::dvec2, 4> CameraModel::imageCorners() const {
 }
 
 glm::mat4 CameraModel::glProjectionMatrix(double near_m, double far_m) const {
-    // Derived rather than borrowed from glm::perspective, because an
-    // off-centre principal point is exactly the case glm::perspective cannot
-    // express, and tolerating a centred approximation here would mean the
-    // rendered view and the geolocation maths disagreed about where a pixel
-    // points - the one thing this tool must get right.
+    // Derived rather than borrowed from glm::perspective: an off-centre
+    // principal point is exactly what glm::perspective cannot express, and a
+    // centred approximation here would disagree with the geolocation maths
+    // about where a pixel points - the one thing this must get right.
     //
     // Eye space is GL's: +x right, +y up, -z forward, so x_eye = x_optical,
     // y_eye = -y_optical, z_eye = -z_optical (the view matrix applies that

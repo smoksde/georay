@@ -39,11 +39,9 @@ Geodetic ecefToGeodetic(const glm::dvec3& ecef) {
 
     const double lon = std::atan2(ecef.y, ecef.x);
 
-    // Bowring's formula gives a latitude from the reduced latitude beta in
-    // closed form. It is good to a couple of micrometres near the surface,
-    // and degrades with altitude - fine for most purposes, but this is a
-    // geolocation tool whose whole job is reporting coordinates, so it is
-    // used as the seed for a refinement rather than as the answer.
+    // Bowring's closed form from the reduced latitude beta: good to a couple
+    // of micrometres near the surface but degrades with altitude, so used as
+    // a seed for the refinement below rather than the answer.
     const double beta = std::atan2(a * ecef.z, b * p);
     const double num  = ecef.z + b * ep_sq * std::pow(std::sin(beta), 3);
     const double den  = p - a * e_sq * std::pow(std::cos(beta), 3);
@@ -59,10 +57,9 @@ Geodetic ecefToGeodetic(const glm::dvec3& ecef) {
     };
 
     double alt = 0.0;
-    // Three fixed-point steps on tan(lat) = z / (p (1 - e^2 N/(N+h))). From
+    // Fixed-point steps on tan(lat) = z / (p (1 - e^2 N/(N+h))): from
     // Bowring's seed this converges to the double-precision floor
-    // immediately; the loop is cheap and removes altitude as a source of
-    // error entirely.
+    // immediately, removing altitude as a source of error.
     for (int i = 0; i < 3; ++i) {
         const double sin_lat = std::sin(lat);
         const double n = a / std::sqrt(1.0 - e_sq * sin_lat * sin_lat);

@@ -10,9 +10,8 @@
 namespace georay {
 namespace {
 
-// A plausible-position check. A mission file with latitude 0, longitude 0 is
-// almost always an unset field rather than a sortie in the Gulf of Guinea,
-// and flying to it would silently relocate the whole scene.
+// Latitude 0, longitude 0 is almost always an unset field, not a sortie in
+// the Gulf of Guinea - flying to it would silently relocate the scene.
 bool plausiblePosition(double lat, double lon) {
     if (!std::isfinite(lat) || !std::isfinite(lon)) return false;
     if (lat < -90.0 || lat > 90.0 || lon < -180.0 || lon > 180.0) return false;
@@ -120,9 +119,8 @@ bool parseQgcPlan(const std::string& text, Mission& out, std::string& error) {
         error = "not a QGroundControl plan (top level is not an object)";
         return false;
     }
-    // fileType is how QGC identifies its own files. Checking it means a JSON
-    // document of some other kind fails with a useful message rather than
-    // producing an empty mission.
+    // Checking fileType means a JSON document of some other kind fails with
+    // a useful message rather than producing an empty mission.
     if (root.has("fileType") && root["fileType"].string() != "Plan") {
         error = "JSON file is not a QGroundControl Plan (fileType is '" +
                 root["fileType"].string() + "')";
@@ -158,9 +156,8 @@ bool parseQgcPlan(const std::string& text, Mission& out, std::string& error) {
         const JsonValue& item = items.at(i);
         if (!item.isObject()) continue;
 
-        // A survey or corridor scan appears as a ComplexItem, whose expanded
-        // waypoints QGC computes itself. Skipping it with a note is honest;
-        // silently dropping it would make a plan look shorter than it is.
+        // A survey/corridor scan is a ComplexItem whose waypoints QGC
+        // expands itself; skipped rather than silently dropped.
         const std::string type = item["type"].string();
         if (type == "ComplexItem") {
             parsed.name += parsed.name.empty() ? "" : " ";
@@ -221,9 +218,9 @@ bool parseWaypointList(const std::string& text, Mission& out, std::string& error
         ++line_number;
         if (line.empty() || line[0] == '#') continue;
 
-        // Columns: seq, current, frame, command, p1..p4, x, y, z, autocontinue.
-        // Whitespace-separated rather than strictly tab-separated, because
-        // files edited by hand routinely end up with spaces.
+        // Columns: seq, current, frame, command, p1..p4, x, y, z,
+        // autocontinue. Whitespace-separated, not strictly tabs - hand-edited
+        // files routinely end up with spaces.
         std::istringstream fields(line);
         double column[12];
         int read = 0;

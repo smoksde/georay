@@ -19,14 +19,11 @@ GeolocateResult geolocatePixel(const UavState& state, const CameraModel& camera,
     out.march_steps = hit.steps;
 
     if (!hit.hit) {
-        // Distinguish "above the horizon" from "ran out of map". Both give no
-        // answer, but only the first is a property of where the camera points
-        // rather than of how much terrain was loaded - and only the second is
-        // fixed by loading more terrain, which is why the tool must not
-        // confuse them.
+        // Distinguish "above the horizon" (not fixed by more terrain) from
+        // "ran out of map" (is). An upward ray also technically leaves the
+        // modelled square, but reporting that would imply more terrain
+        // might help - it would not.
         out.pointed_at_sky = out.ray_direction_enu.z >= 0.0;
-        // An upward ray does leave the modelled square on its way out, but
-        // saying so would imply more terrain might have helped. It would not.
         out.left_coverage = hit.left_coverage && !out.pointed_at_sky;
         return out;
     }
@@ -45,11 +42,9 @@ GeolocateResult geolocatePixel(const UavState& state, const CameraModel& camera,
         rad2deg(std::atan2(-out.ray_direction_enu.z,
                            std::hypot(out.ray_direction_enu.x, out.ray_direction_enu.y)));
 
-    // Ground sample distance: trace a neighbouring pixel's ray against the
-    // tangent plane at the hit, rather than dividing range by focal length.
-    // The plane solve costs nothing extra and, unlike the textbook
-    // range/f formula, stays right for an oblique view, where the far edge of
-    // a frame can have many times the GSD of the near edge.
+    // GSD: trace a neighbouring pixel's ray against the tangent plane at the
+    // hit rather than dividing range by focal length - costs nothing extra
+    // and, unlike that textbook formula, stays right for an oblique view.
     {
         const glm::dvec3 neighbour_optical = camera.pixelToRay(pixel + glm::dvec2(1.0, 0.0));
         const glm::dvec3 neighbour_enu =
@@ -62,9 +57,8 @@ GeolocateResult geolocatePixel(const UavState& state, const CameraModel& camera,
                 out.gsd_m = glm::length(neighbour_point - hit.point);
             }
         }
-        // denom ~ 0 means the neighbouring ray runs parallel to the surface:
-        // a grazing view where the GSD is genuinely unbounded. Leaving it at
-        // zero reads as "not meaningful", which it is.
+        // denom ~ 0: a grazing view where GSD is genuinely unbounded, and
+        // left at zero reads as "not meaningful", which it is.
     }
 
     return out;

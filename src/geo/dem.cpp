@@ -9,9 +9,8 @@
 namespace georay {
 namespace {
 
-// Integer square root of n, or 0 when n is not a perfect square. Used to
-// turn a file length into a posting count, which is the only way a headerless
-// format can declare its own resolution.
+// Integer square root of n, or 0 when not a perfect square - turns a file
+// length into a posting count, the only way a headerless format declares one.
 int exactSqrt(long long n) {
     if (n <= 0) return 0;
     long long r = (long long)std::llround(std::sqrt(double(n)));
@@ -24,8 +23,8 @@ int exactSqrt(long long n) {
 }  // namespace
 
 bool HgtTile::parseName(const std::string& path, int& lat, int& lon) {
-    // Work from the basename, so a directory called "N00E000" upstream of the
-    // file cannot be mistaken for the tile.
+    // Basename only, so a directory named "N00E000" upstream isn't mistaken
+    // for the tile.
     const size_t slash = path.find_last_of("/\\");
     std::string base = slash == std::string::npos ? path : path.substr(slash + 1);
 
@@ -50,15 +49,14 @@ bool HgtTile::parseName(const std::string& path, int& lat, int& lon) {
 }
 
 std::string HgtTile::tileNameFor(double lat_deg, double lon_deg) {
-    // A NaN would make the conversion below undefined, and an out-of-range
-    // coordinate would format a name no tile could ever have. Clamping first
-    // means a bad position asks for a real tile and is told there is no data,
-    // rather than producing something stranger.
+    // Clamp first: a NaN makes the conversion below undefined, and this way
+    // a bad position asks for a real tile and is told there's no data,
+    // rather than formatting a name no tile could have.
     if (!std::isfinite(lat_deg)) lat_deg = 0.0;
     if (!std::isfinite(lon_deg)) lon_deg = 0.0;
 
-    // Floor, not truncation: at latitude -0.5 the tile is S01, and truncating
-    // would call it N00 and read the wrong side of the equator.
+    // Floor, not truncation: at latitude -0.5 the tile is S01, and
+    // truncating would read the wrong side of the equator as N00.
     const int lat = std::clamp(int(std::floor(lat_deg)), -90, 89);
     const int lon = std::clamp(int(std::floor(lon_deg)), -180, 179);
 
@@ -106,10 +104,8 @@ bool HgtTile::load(const std::string& path, HgtTile& out, std::string& error) {
     out.samples_.resize(size_t(side) * size_t(side));
     out.void_count_ = 0;
     for (size_t i = 0; i < out.samples_.size(); ++i) {
-        // Big-endian, always - .hgt predates the convention of writing the
-        // host's byte order and has never changed. Assembling the value by
-        // hand rather than byte-swapping a loaded int16 keeps it correct on a
-        // big-endian host too.
+        // Always big-endian; assembled by hand rather than byte-swapping a
+        // loaded int16, so this is correct on a big-endian host too.
         const int16_t value = int16_t((raw[i * 2] << 8) | raw[i * 2 + 1]);
         out.samples_[i] = value;
         if (value == kVoid) ++out.void_count_;
@@ -149,10 +145,9 @@ bool HgtTile::sample(double lat_deg, double lon_deg, double& height_m) const {
     const int16_t p00 = post(row, col), p01 = post(row, col + 1);
     const int16_t p10 = post(row + 1, col), p11 = post(row + 1, col + 1);
 
-    // Interpolate over whichever corners have data, weighted as usual. A void
-    // next to real ground should not drag the surface to zero, and dropping
-    // the sample entirely would tear a hole through terrain that is mostly
-    // fine. Only an entirely void cell is genuinely no-data.
+    // Interpolate over whichever corners have data: a void next to real
+    // ground should not drag the surface to zero. Only an all-void cell is
+    // genuinely no-data.
     const double w00 = (1 - tx) * (1 - ty), w01 = tx * (1 - ty);
     const double w10 = (1 - tx) * ty, w11 = tx * ty;
 
@@ -183,9 +178,8 @@ const HgtTile* DemSource::tileFor(double lat_deg, double lon_deg) const {
         touch();
         return &found->second;
     }
-    // Remembered misses: without this, every sample over a gap re-stats a
-    // file that is not there, which over a 263k-post resample is a quarter of
-    // a million failed opens.
+    // Remembered misses: without this, every sample over a gap re-stats an
+    // absent file - a quarter million failed opens over a 263k-post resample.
     if (missing_.count(name)) return nullptr;
 
     HgtTile tile;
