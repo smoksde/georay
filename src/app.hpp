@@ -2,14 +2,12 @@
 
 // The application: window, input, simulation state, and the two views.
 //
-// The window shows a 3D scene you can orbit, and inset into it the image the
-// simulated UAV camera is producing. Clicking a pixel in that inset runs the
-// geolocation pipeline on it and reports a latitude and longitude. That
-// arrangement is the whole design idea: the inset is rendered with the same
+// The window shows a 3D scene you can orbit, with the simulated UAV
+// camera's image inset into it. Clicking a pixel there runs the geolocation
+// pipeline and reports a latitude/longitude - rendered with the same
 // intrinsics and extrinsics the maths uses, so the ray drawn in the 3D view
-// is a falsifiable claim about the pixel you clicked - if the ray misses the
-// feature you aimed at, something is wrong, and you can see it rather than
-// having to trust a number.
+// is a falsifiable claim: if it misses the feature you aimed at, you see it
+// rather than having to trust a number.
 
 #include <memory>
 #include <string>
@@ -41,20 +39,16 @@ public:
         int window_width = 1600;
         int window_height = 900;
         // When set, the app renders a few frames, writes a BMP here and
-        // exits. That makes the renderer testable from a script instead of
-        // only by looking at it, which matters for a tool whose output is a
-        // picture.
+        // exits - makes the renderer testable from a script, not just by
+        // looking at it.
         std::string screenshot_path;
         int screenshot_frames = 4;
 
-        // Real elevation data. Empty means the synthetic terrain, which is
-        // still the default: it needs no files and makes the tool runnable
-        // the moment it is built.
+        // Real elevation data. Empty means synthetic terrain - still the
+        // default, since it needs no files and runs the moment it's built.
         std::string dem_directory;
         std::string geoid_grid_path;
-        // A single separation for the scene, used when no grid is given. The
-        // geoid varies about a centimetre per kilometre, so one value is good
-        // to a few centimetres over a scene this size - see geoid.hpp.
+        // A single separation when no grid is given - see geoid.hpp.
         double geoid_separation_m = 0.0;
         bool geoid_separation_given = false;
 
@@ -64,12 +58,9 @@ public:
         std::string street_source = "basemapde";
         std::string tile_directory = "data/tiles";
 
-        // Fetch missing tiles while flying. Off unless asked for: the
-        // self-test and CI must never touch the network, and nobody should
-        // discover they are downloading by accident.
-        // On by default. This is used with a connection, and a map that
-        // fills itself in is the expected behaviour rather than an opt-in;
-        // --offline is there for a demo on a train.
+        // Fetch missing tiles while flying. On by default - a map that
+        // fills itself in is the expected behaviour here, not an opt-in;
+        // --offline is for a demo on a train.
         bool online = true;
         int online_tile_limit = 4000;
         double online_delay_s = 0.25;
@@ -80,9 +71,9 @@ public:
         // Which ground skin to start on: "map", "satellite" or "height".
         std::string map_mode = "satellite";
 
-        // Advance the simulation by this many seconds before the first frame
-        // is drawn. Makes a long flight - and the re-anchoring it triggers -
-        // reachable from a script instead of only by waiting.
+        // Advance the simulation this many seconds before the first frame -
+        // makes a long flight, and the re-anchoring it triggers, reachable
+        // without waiting.
         double advance_seconds = 0.0;
 
         double origin_latitude_deg = 48.137554;
@@ -114,12 +105,9 @@ public:
 
 private:
     // A vertical structure standing on the terrain: a mast, a tower block.
-    //
-    // They exist to give the camera view recognisable features with real
-    // parallax, and to demonstrate something a prototype like this must not
-    // paper over - rays intersect the ground model, not the structures, so
-    // clicking the top of a tower geolocates the ground behind it. That is
-    // the DSM-versus-DTM problem, and it is better shown than explained.
+    // Gives the camera view recognisable parallax, and demonstrates the
+    // DSM-versus-DTM problem - rays intersect the ground model, not the
+    // structures, so clicking a tower's top geolocates the ground behind it.
     struct Structure {
         glm::dvec2 position_enu{0.0};
         double height_m = 25.0;
@@ -140,32 +128,22 @@ private:
     bool buildWorld();
     bool loadDemTerrain();
     bool loadMissionFile(const std::string& path);
-    // Rebuilds the surface mesh with whatever map layers are loaded.
-    void rebuildTerrainMesh();
 
     // --- floating origin --------------------------------------------------
     //
-    // One ENU frame is a tangent plane, and flat ground falls away from it as
-    // d^2/2R: half a metre at 2 km, 49 m at 25 km, 4.4 km across Brandenburg.
-    // That caps how far a single frame can usefully reach, which is what
-    // stopped the scene from spanning more than a few kilometres.
+    // An ENU frame is a tangent plane; flat ground falls away from it as
+    // d^2/2R (half a metre at 2 km, 4.4 km across Brandenburg), which caps
+    // how far one frame can usefully reach.
     //
-    // The fix is to move the frame rather than to enlarge it. The origin
-    // follows the aircraft, so the error is bounded by the *visible* radius
-    // instead of by the size of the world, and the geolocation maths never
-    // learns that anything changed - it still sees one local frame, which is
-    // why none of it had to be touched.
-    //
-    // The alternative, a local frame per terrain tile, would have made the
-    // ray marcher walk between frames mid-solve. That is the most carefully
-    // verified code here and not worth disturbing for the same answer.
+    // Fixed by moving the frame rather than enlarging it: the origin follows
+    // the aircraft, so error is bounded by the visible radius instead of the
+    // world's size, and the geolocation maths never learns anything changed
+    // - it still sees one local frame. The alternative, a frame per terrain
+    // tile, would make the ray marcher walk between frames mid-solve - not
+    // worth disturbing the most carefully verified code here for the same
+    // answer.
     void reanchorFrame(const Geodetic& new_origin);
-    // Picks the map window covering the frame origin, for each layer that is
-    // backed by a library. Returns true if anything changed.
-    // Re-stitches whichever layers need it: when the frame has moved, or
-    // when the view has changed enough to want a different zoom.
     // Ground skin, cycled by M.
-    GroundMode groundMode() const { return ground_mode_; }
     void cycleGroundMode();
     // Re-anchors when the aircraft has drifted far enough from the origin
     // that the terrain window no longer comfortably surrounds it.
@@ -212,9 +190,8 @@ private:
     std::unique_ptr<Scene> scene_;
     ViewCamera view_camera_;
 
-    // The reference point of the local ENU frame: everything in the
-    // simulation is expressed relative to this, and it is the "launch point"
-    // a real flight log would carry.
+    // The reference point of the local ENU frame - the "launch point" a
+    // real flight log would carry; everything else is relative to this.
     Geodetic frame_origin_{48.137554, 11.575497, 515.0};
     EnuFrame frame_;
     int reanchor_count_ = 0;
@@ -222,9 +199,9 @@ private:
     double last_dt_ = 0.0;
     double reanchor_distance_m_ = 0.0;  // how far the aircraft is from the origin now
 
-    // Frame-independent copies of the state that would otherwise be silently
-    // relocated by a re-anchor. Anything stored in ENU metres has to be kept
-    // in geodetic as well, or it quietly moves when the origin does.
+    // Frame-independent copies, kept in geodetic because anything stored
+    // only in ENU metres quietly moves when a re-anchor relocates the
+    // origin.
     Geodetic track_target_geodetic_;
     Geodetic pattern_centre_geodetic_;
     Geodetic view_target_geodetic_;
@@ -233,22 +210,16 @@ private:
     std::unique_ptr<Terrain> terrain_;
     Mission mission_;
     bool has_mission_ = false;
-    // Only populated when real elevation data was requested. Kept alive
-    // because the terrain can be switched back and forth between the DEM and
-    // the synthetic generators at runtime, and re-reading the tiles each time
-    // would stall the frame.
+    // Only populated when real elevation data was requested; kept alive
+    // since the terrain can switch between DEM and synthetic at runtime,
+    // and re-reading the tiles each time would stall the frame.
     std::unique_ptr<DemSource> dem_;
     GeoidModel geoid_;
-    // Layer 0 is satellite imagery, layer 1 a drawn street map. Both are
-    // kept resident so switching is instant; a 50 MB raster each is cheaper
-    // than re-reading and re-uploading on a keypress.
-    // Tiles on disk, decoded on demand, shared by both layers.
+    // Tiles on disk, decoded on demand, shared by both layers (0 satellite,
+    // 1 street map).
     std::unique_ptr<TileCache> tiles_;
     std::unique_ptr<TileFetcher> fetcher_;
-    // Re-stitch when the fetcher has delivered since the last build.
-    int last_seen_fetched_ = 0;
     std::string reported_fetch_error_;
-    double seconds_since_restitch_ = 0.0;
     const TileSource* map_sources_[2] = {nullptr, nullptr};
     Terrain::DemLoadReport dem_report_;
     bool using_dem_ = false;
@@ -268,10 +239,9 @@ private:
     bool have_pick_ = false;
     glm::dvec2 pick_pixel_{0.0};
     GeolocateResult pick_result_;
-    // Round-trip residual for the picked pixel: geolocate, project the answer
-    // back, and measure how far from the original pixel it lands. Shown in
-    // the HUD because a pipeline that cannot reproduce its own input has no
-    // business reporting coordinates.
+    // Round-trip residual: geolocate, project the answer back, measure the
+    // distance from the original pixel. A pipeline that cannot reproduce
+    // its own input has no business reporting coordinates.
     double pick_reprojection_px_ = 0.0;
     // Sensitivity of the answer to pose error, by finite difference.
     double sensitivity_tilt_m_per_deg_ = 0.0;
@@ -283,11 +253,11 @@ private:
     bool show_help_ = true;
     bool show_footprint_ = true;
     bool large_inset_ = false;
-    // Darkens the ground so the bright overlays stay readable. On by
-    // default: against a paper-white map zoomed out, they vanish.
+    // Darkens the ground so the bright overlays stay readable - on by
+    // default, since against a paper-white map zoomed out they vanish.
     bool dark_ground_ = true;
-    // Which map layer is draped, or -1 for bare terrain. M cycles through
-    // whichever layers actually loaded.
+    // Ground skin: map, satellite, or height map. M cycles through
+    // whichever ones actually loaded.
     GroundMode ground_mode_ = GroundMode::Satellite;
     bool follow_aircraft_ = true;
     bool dragging_orbit_ = false;
