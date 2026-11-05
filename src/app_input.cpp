@@ -89,6 +89,22 @@ void App::onKeyDown(const SDL_Keysym& key) {
             follow_aircraft_ = !follow_aircraft_;
             break;
 
+        case SDLK_l:
+            togglePlanningMode();
+            break;
+        case SDLK_z:
+            undoPlannedWaypoint();
+            break;
+        case SDLK_c:
+            clearPlannedMission();
+            break;
+        case SDLK_x:
+            markPlannedLanding();
+            break;
+        case SDLK_s:
+            savePlannedMission();
+            break;
+
         case SDLK_1:
         case SDLK_2:
         case SDLK_3:
@@ -202,6 +218,13 @@ void App::onMouseButtonDown(const SDL_MouseButtonEvent& event) {
     if (event.button == SDL_BUTTON_LEFT && windowToImagePixel(event.x, event.y, image_pixel)) {
         pickPixel(image_pixel);
         return;  // a click in the inset picks; it must not also start an orbit
+    }
+
+    // Planning claims left clicks in the main view for placing waypoints,
+    // same as the inset claims them for picking - either way, not an orbit.
+    if (event.button == SDL_BUTTON_LEFT && planning_mode_) {
+        addPlannedWaypoint(event.x, event.y);
+        return;
     }
 
     if (event.button == SDL_BUTTON_LEFT) dragging_orbit_ = true;

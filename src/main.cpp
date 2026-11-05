@@ -35,6 +35,8 @@ void printUsage() {
         "  --street-map SOURCE           tile source for the drawn-map layer; M switches\n"
         "  --mission FILE                a QGroundControl .plan or QGC WPL .waypoints\n"
         "                                list to fly\n"
+        "  --plan-output FILE            where L-mode mission planning saves a .plan\n"
+        "                                (default missions/planned.plan)\n"
         "  --map-mode MODE               satellite (default), map, or height\n"
         "  --tiles DIR                   tile cache directory (default data/tiles)\n"
         "  --offline                     do not fetch tiles (online is the default)\n"
@@ -123,6 +125,10 @@ int main(int argc, char** argv) {
         }
         if (arg == "--mission" && i + 1 < argc) {
             options.mission_path = argv[++i];
+            continue;
+        }
+        if (arg == "--plan-output" && i + 1 < argc) {
+            options.plan_output_path = argv[++i];
             continue;
         }
         if (arg == "--advance" && i + 1 < argc) {

@@ -236,4 +236,77 @@ void testMission() {
           "a plan with no navigable waypoints is refused");
 }
 
+// writeQgcPlan is the other half of parseQgcPlan, and the one check that
+// matters is that the two agree: whatever is written must read back as
+// exactly what went in, including the takeoff/land commands the planner
+// produces and lat/lon precision tight enough to matter at this tool's scale.
+void testWriteQgcPlan() {
+    std::printf("writing qgroundcontrol plans\n");
+
+    Mission mission;
+    mission.cruise_speed_mps = 12.5;
+    mission.has_home = true;
+    mission.home = Geodetic(52.516300, 13.377700, 38.5);
+
+    auto item = [](int command, double lat, double lon, double alt_m) {
+        Waypoint w;
+        w.command = command;
+        w.frame = mav_frame::global_relative_alt;
+        w.latitude_deg = lat;
+        w.longitude_deg = lon;
+        w.altitude_m = alt_m;
+        w.autocontinue = true;
+        return w;
+    };
+    mission.items.push_back(item(mav_cmd::takeoff, 52.516300, 13.377700, 50.0));
+    mission.items.push_back(item(mav_cmd::waypoint, 52.520000, 13.380000, 60.0));
+    mission.items.push_back(item(mav_cmd::waypoint, 52.520000, 13.390000, 60.0));
+    mission.items.push_back(item(mav_cmd::land, 52.516300, 13.377700, 0.0));
+
+    const std::string directory = makeTempDir();
+    check(!directory.empty(), "temporary directory for the plan-writing test");
+    if (directory.empty()) return;
+    const std::string path = directory + "/round_trip.plan";
+
+    std::string error;
+    check(writeQgcPlan(path, mission, error), "a built mission writes: " + error);
+
+    Mission read_back;
+    check(loadMission(path, read_back, error), "the written plan loads back: " + error);
+    check(read_back.items.size() == mission.items.size(),
+          "every item survives the round trip");
+    checkNear(read_back.cruise_speed_mps, mission.cruise_speed_mps, 1e-6,
+              "cruise speed round-trips");
+    check(read_back.has_home, "home position is marked present");
+    checkNear(read_back.home.latitude_deg, mission.home.latitude_deg, 1e-7,
+              "home latitude round-trips");
+    checkNear(read_back.home.altitude_m, mission.home.altitude_m, 1e-6,
+              "home altitude round-trips");
+
+    if (read_back.items.size() == mission.items.size()) {
+        for (size_t i = 0; i < mission.items.size(); ++i) {
+            const Waypoint& a = mission.items[i];
+            const Waypoint& b = read_back.items[i];
+            check(a.command == b.command, "command round-trips, item " + std::to_string(i));
+            check(a.frame == b.frame, "frame round-trips, item " + std::to_string(i));
+            checkNear(a.latitude_deg, b.latitude_deg, 1e-7,
+                      "latitude round-trips, item " + std::to_string(i));
+            checkNear(a.longitude_deg, b.longitude_deg, 1e-7,
+                      "longitude round-trips, item " + std::to_string(i));
+            checkNear(a.altitude_m, b.altitude_m, 1e-6,
+                      "altitude round-trips, item " + std::to_string(i));
+        }
+    }
+    check(read_back.items.front().command == mav_cmd::takeoff,
+          "the takeoff item is still a takeoff after the round trip");
+    check(read_back.items.back().command == mav_cmd::land,
+          "the land item is still a land after the round trip");
+
+    // Writing with nothing to write is refused rather than producing a plan
+    // with no route - a mission file that loads but goes nowhere.
+    Mission empty_mission;
+    check(!writeQgcPlan(directory + "/empty.plan", empty_mission, error),
+          "writing an empty mission is refused");
+}
+
 }  // namespace georay

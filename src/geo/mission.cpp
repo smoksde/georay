@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
 #include <fstream>
 #include <sstream>
 
@@ -291,6 +292,62 @@ bool loadMission(const std::string& path, Mission& out, std::string& error) {
     if (out.name.empty()) {
         const size_t slash = path.find_last_of("/\\");
         out.name = slash == std::string::npos ? path : path.substr(slash + 1);
+    }
+    return true;
+}
+
+namespace {
+std::string fixed(double v, int decimals) {
+    char buffer[64];
+    std::snprintf(buffer, sizeof(buffer), "%.*f", decimals, v);
+    return buffer;
+}
+}  // namespace
+
+bool writeQgcPlan(const std::string& path, const Mission& mission, std::string& error) {
+    if (mission.items.empty()) {
+        error = "cannot write a mission with no items";
+        return false;
+    }
+    std::ofstream file(path, std::ios::binary);
+    if (!file) {
+        error = "cannot open " + path + " for writing";
+        return false;
+    }
+
+    file << "{\n"
+            "    \"fileType\": \"Plan\",\n"
+            "    \"geoFence\": { \"circles\": [], \"polygons\": [], \"version\": 2 },\n"
+            "    \"groundStation\": \"georay\",\n"
+            "    \"mission\": {\n"
+            "        \"cruiseSpeed\": " << fixed(mission.cruise_speed_mps, 1) << ",\n"
+            "        \"firmwareType\": 12,\n"
+            "        \"globalPlanAltitudeMode\": 1,\n"
+            "        \"hoverSpeed\": 5,\n"
+            "        \"items\": [\n";
+    for (size_t i = 0; i < mission.items.size(); ++i) {
+        const Waypoint& w = mission.items[i];
+        file << "            { \"AMSLAltAboveTerrain\": null, \"Altitude\": " << fixed(w.altitude_m, 1)
+             << ", \"AltitudeMode\": 1, \"autoContinue\": " << (w.autocontinue ? "true" : "false")
+             << ", \"command\": " << w.command << ", \"doJumpId\": " << (i + 1)
+             << ", \"frame\": " << w.frame << ", \"params\": [0, 0, 0, null, "
+             << fixed(w.latitude_deg, 7) << ", " << fixed(w.longitude_deg, 7) << ", "
+             << fixed(w.altitude_m, 1) << "], \"type\": \"SimpleItem\" }"
+             << (i + 1 < mission.items.size() ? ",\n" : "\n");
+    }
+    file << "        ],\n"
+            "        \"plannedHomePosition\": [" << fixed(mission.home.latitude_deg, 7) << ", "
+         << fixed(mission.home.longitude_deg, 7) << ", " << fixed(mission.home.altitude_m, 1) << "],\n"
+            "        \"vehicleType\": 2,\n"
+            "        \"version\": 2\n"
+            "    },\n"
+            "    \"rallyPoints\": { \"points\": [], \"version\": 2 },\n"
+            "    \"version\": 1\n"
+            "}\n";
+
+    if (!file) {
+        error = path + ": write failed";
+        return false;
     }
     return true;
 }

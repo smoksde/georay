@@ -15,7 +15,7 @@ goes. If the ray misses the feature you aimed at, you can see it.
 
 *The default scene: satellite imagery of central Berlin on real SRTM
 elevation, orbiting the Brandenburg Gate. The inset is what the UAV camera
-sees; clicking a pixel in it gives the coordinate at the bottom left.*
+sees; clicking a pixel in it draws the ray and marks where it lands.*
 
 ## Building
 
@@ -133,6 +133,23 @@ those itself and georay does not re-implement its pattern generator.
 The route is drawn with a plumb line from every waypoint down to the ground,
 which is the point — a waypoint's altitude is the thing most often wrong in a
 plan, and a route drawn without them tells you nothing about height.
+
+### Planning one, with reduced functionality
+
+`L` enters planning mode. Left-click anywhere in the 3D view and the point
+under the cursor — raycast into the real terrain, the same way a clicked
+camera pixel is — becomes a waypoint, at a fixed 50 m above the ground. The
+first point placed is a takeoff; `X` appends a landing back at it; `Z` undoes
+the last point; `C` clears the plan. `S` writes it to
+`missions/planned.plan` (`--plan-output` to change that) and, if it saved,
+loads it as the active mission so it flies immediately.
+
+"Reduced" is deliberate: one straight sequence, one altitude frame
+(relative-to-home, QGC's own default for a plain waypoint), no reordering,
+no survey patterns, no loiter or camera-trigger items. The file it writes is
+a plain QGC `.plan` — `writeQgcPlan` is the mirror image of `parseQgcPlan`,
+and the self-test round-trips a built mission through both to check they
+agree on every field, not just that the file parses.
 
 ## Flying beyond one scene
 
@@ -447,6 +464,9 @@ continental distances.
 | `[` `]`, `,` `.`, `-` `=`, `;` `'` | Camera zoom, height AGL, ground speed, orbit radius |
 | `M`, `N` | Ground mode (map / satellite / height), dark ground |
 | `V`, `F` | Resize the camera pane, toggle the footprint |
+| `L` | Toggle mission planning |
+| Left click **in the 3D view, while planning** | Add a waypoint on the ground |
+| `Z`, `C`, `X`, `S` | Undo last waypoint, clear plan, add landing, save plan and fly it |
 | `R`, `F12`, `H`, `Q` | Reset, screenshot, help, quit |
 
 ## How the geolocation works
@@ -470,24 +490,26 @@ entirely in double precision:
    coarse enough to cross kilometres would otherwise quantise the answer.
 5. **Back to coordinates.** The hit point, ENU → ECEF → WGS84 geodetic.
 
-The inverse direction — world point → pixel — is in the same file, and is what
-the HUD's *reprojection* field exercises every frame.
+The inverse direction — world point → pixel — is in the same file. It is what
+makes the forward chain checkable at all: project the ground hit back through
+the camera and it has to land on the pixel that was clicked, or the two halves
+of the pipeline disagree with each other and every number is suspect.
+`testRenderMatchesGeolocation` in the self-test is exactly that check, pushed
+through thousands of random poses.
 
-### What it reports, and why
+### What clicking shows
 
-Besides latitude, longitude and elevation, the HUD shows the things that
-determine whether a geolocation is worth anything:
-
-- **Reprojection** — the picked point projected back through the camera, in
-  pixels from where it was picked. A pipeline that cannot reproduce its own
-  input has no business reporting coordinates.
-- **Pixel GSD** — how wide that one pixel is on the ground, computed by tracing
-  a neighbouring pixel against the tangent plane at the hit rather than by the
-  textbook range/focal-length formula, which is wrong for oblique views.
-- **D/tilt, D/heading, D/altitude** — how far the answer moves per degree of
-  gimbal error, per degree of heading error, and per metre of altitude error.
-  At a shallow depression angle a single degree is tens of metres, and no
-  amount of GPS accuracy helps. This is the error budget, measured live.
+The HUD stays deliberately light: no dedicated readout panel, just the ray and
+a ground marker drawn in the 3D view where the pixel landed — the "falsifiable
+claim" this tool is built around, not a block of text to trust instead. Moving
+the cursor over the simulated camera pane, without even clicking, pins a live
+latitude/longitude to the bottom of that pane, computed the same way.
+`GeolocateResult::gsd_m` is still part of every geolocation, pixel GSD
+included; it is just no longer printed. The per-click reprojection residual
+and pose-sensitivity readout were a live re-derivation of what
+`testRenderMatchesGeolocation` and `testGeolocateRoundTrip` already check in
+the self-test, and were removed along with the panel rather than kept
+computing numbers nothing displayed.
 
 ## Text
 

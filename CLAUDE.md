@@ -64,11 +64,16 @@ checks for exactly that, against the closed-form `d^2 / 2R`.
 
 ## Mission files
 
-`src/geo/mission.hpp` reads QGroundControl `.plan` and `QGC WPL` files. The
-altitude frame is the part to be careful with: MAV_FRAME_GLOBAL_RELATIVE_ALT
-is measured from the home position, not from sea level, and confusing the two
-is a 38 m error over Berlin. `resolveAltitude` is the single place that
-decides; the selftest checks the frames are not interchangeable.
+`src/geo/mission.hpp` reads QGroundControl `.plan` and `QGC WPL` files, and
+`writeQgcPlan` writes `.plan` back out - the mirror of `parseQgcPlan`, used by
+the in-app mission planner (`L` to place waypoints by clicking the ground,
+`S` to save and fly). The altitude frame is the part to be careful with:
+MAV_FRAME_GLOBAL_RELATIVE_ALT is measured from the home position, not from
+sea level, and confusing the two is a 38 m error over Berlin.
+`resolveAltitude` is the single place that decides on load; the planner only
+ever writes relative-alt items, so it never has to. The selftest checks the
+frames are not interchangeable, and separately round-trips a built mission
+through `writeQgcPlan` and back to check the two agree on every field.
 
 `src/geo/json.hpp` is a minimal JSON reader written for this rather than a
 library, because the subset needed is a handful of numbers and a

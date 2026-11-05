@@ -103,4 +103,9 @@ bool loadMission(const std::string& path, Mission& out, std::string& error);
 bool parseQgcPlan(const std::string& text, Mission& out, std::string& error);
 bool parseWaypointList(const std::string& text, Mission& out, std::string& error);
 
+// Writes a QGC .plan - the format loadMission reads back. Reduced on
+// purpose: every item becomes a SimpleItem with the params QGC itself
+// leaves at zero for a plain waypoint, which parseQgcPlan already tolerates.
+bool writeQgcPlan(const std::string& path, const Mission& mission, std::string& error);
+
 }  // namespace georay

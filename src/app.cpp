@@ -1,6 +1,7 @@
 #include "app.hpp"
 
 #include <algorithm>
+#include <cmath>
 #include <fstream>
 #include <iostream>
 #include <sstream>
@@ -423,6 +424,85 @@ bool App::loadMissionFile(const std::string& path) {
     return true;
 }
 
+void App::togglePlanningMode() {
+    planning_mode_ = !planning_mode_;
+    std::cout << "georay: planning mode " << (planning_mode_ ? "on" : "off");
+    if (!planned_items_.empty()) std::cout << " (" << planned_items_.size() << " waypoint(s))";
+    std::cout << "\n";
+}
+
+void App::addPlannedWaypoint(int x, int y) {
+    Geodetic ground;
+    if (!pickGroundInWorldView(x, y, ground)) return;
+
+    Waypoint item;
+    // The first point placed is where the aircraft leaves from.
+    item.command = planned_items_.empty() ? mav_cmd::takeoff : mav_cmd::waypoint;
+    item.frame = mav_frame::global_relative_alt;
+    item.latitude_deg = ground.latitude_deg;
+    item.longitude_deg = ground.longitude_deg;
+    item.altitude_m = kPlannedAltitudeAglM;
+    item.autocontinue = true;
+    planned_items_.push_back(item);
+}
+
+void App::undoPlannedWaypoint() {
+    if (!planned_items_.empty()) planned_items_.pop_back();
+}
+
+void App::clearPlannedMission() { planned_items_.clear(); }
+
+void App::markPlannedLanding() {
+    if (planned_items_.empty()) return;
+    Waypoint land = planned_items_.front();
+    land.command = mav_cmd::land;
+    land.altitude_m = 0.0;
+    planned_items_.push_back(land);
+}
+
+void App::savePlannedMission() {
+    if (planned_items_.size() < 2) {
+        std::cerr << "georay: need a takeoff and at least one more point to save a plan\n";
+        return;
+    }
+
+    Mission planned;
+    planned.name = "PLANNED";
+    planned.cruise_speed_mps = flight_.speed();
+
+    // The home position QGC expects is AMSL, not the ellipsoidal height this
+    // tool works in internally - the same conversion loadFromDem runs, done
+    // once here in reverse.
+    const Waypoint& home_item = planned_items_.front();
+    const glm::dvec3 home_xy = frame_.fromGeodetic(
+        Geodetic(home_item.latitude_deg, home_item.longitude_deg, frame_.origin().altitude_m));
+    const double home_ground_z = terrain_->sampleHeight(home_xy.x, home_xy.y);
+    const Geodetic home_ground =
+        frame_.toGeodetic(glm::dvec3(home_xy.x, home_xy.y, home_ground_z));
+    const double home_separation =
+        geoid_.separationAt(home_item.latitude_deg, home_item.longitude_deg);
+    planned.has_home = true;
+    planned.home = Geodetic(home_item.latitude_deg, home_item.longitude_deg,
+                            home_ground.altitude_m - home_separation);
+
+    planned.items = planned_items_;
+    for (size_t i = 0; i < planned.items.size(); ++i) planned.items[i].sequence = int(i);
+
+    std::string error;
+    if (!writeQgcPlan(options_.plan_output_path, planned, error)) {
+        std::cerr << "georay: " << error << "\n";
+        return;
+    }
+    std::cout << "georay: wrote " << options_.plan_output_path << " (" << planned.items.size()
+              << " items)\n";
+
+    // Fly what was just planned, the same way --mission would have loaded it.
+    if (loadMissionFile(options_.plan_output_path)) {
+        planned_items_.clear();
+        planning_mode_ = false;
+    }
+}
+
 bool App::loadDemTerrain() {
     if (!dem_) return false;
     dem_report_ = terrain_->loadFromDem(*dem_, geoid_, frame_);
@@ -588,6 +668,29 @@ void App::pickPixel(const glm::dvec2& image_pixel) {
     have_pick_ = true;
     pick_pixel_ = image_pixel;
     pick_result_ = geolocatePixel(uav_, camera_, *terrain_, frame_, image_pixel);
+}
+
+bool App::pickGroundInWorldView(int x, int y, Geodetic& out) const {
+    // Window pixel -> NDC -> world, by unprojecting at the near and far
+    // planes and using the segment between them as the ray. Works for any
+    // projection matrix, perspective included, without needing the camera's
+    // own eye position as a separate input.
+    const float ndc_x = (2.0f * float(x)) / float(std::max(width_, 1)) - 1.0f;
+    const float ndc_y = 1.0f - (2.0f * float(y)) / float(std::max(height_, 1));
+    const glm::mat4 inverse_view_projection = glm::inverse(view_camera_.viewProjection());
+    glm::vec4 near_point = inverse_view_projection * glm::vec4(ndc_x, ndc_y, -1.0f, 1.0f);
+    glm::vec4 far_point = inverse_view_projection * glm::vec4(ndc_x, ndc_y, 1.0f, 1.0f);
+    if (std::fabs(near_point.w) < 1e-9f || std::fabs(far_point.w) < 1e-9f) return false;
+    near_point /= near_point.w;
+    far_point /= far_point.w;
+
+    const glm::dvec3 origin(near_point.x, near_point.y, near_point.z);
+    const glm::dvec3 direction =
+        glm::normalize(glm::dvec3(far_point) - glm::dvec3(near_point));
+    const RayHit hit = terrain_->raycast(origin, direction);
+    if (!hit.hit || hit.left_coverage) return false;
+    out = frame_.toGeodetic(hit.point);
+    return true;
 }
 
 // --------------------------------------------------------------------------

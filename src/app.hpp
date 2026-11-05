@@ -67,6 +67,9 @@ public:
 
         // A QGroundControl .plan or a QGC WPL .waypoints list to fly.
         std::string mission_path;
+        // Where L-mode planning saves a plan. Overwritten on every save, the
+        // same way F12 always writes georay.bmp.
+        std::string plan_output_path = "missions/planned.plan";
 
         // Which ground skin to start on: "map", "satellite" or "height".
         std::string map_mode = "satellite";
@@ -150,6 +153,31 @@ private:
     void maybeReanchor();
     double reanchorThreshold() const;
 
+    // --- mission planning --------------------------------------------------
+    //
+    // Reduced on purpose: a straight sequence of waypoints at one fixed
+    // altitude, with the first point a takeoff and an explicit key to append
+    // a landing back at it. No reordering, no altitude frame other than
+    // relative-to-home, no complex items - QGC's own planner is what the
+    // output is meant to open in.
+    void togglePlanningMode();
+    // Raycasts under the cursor into the terrain and appends a waypoint
+    // there, or does nothing if the ray leaves coverage.
+    void addPlannedWaypoint(int x, int y);
+    void undoPlannedWaypoint();
+    void clearPlannedMission();
+    // Appends a landing item at the first waypoint's position - "go home and
+    // land" rather than a dedicated landing spot, to avoid a second raycast
+    // and a second kind of point to manage.
+    void markPlannedLanding();
+    // Writes the plan to options_.plan_output_path and, on success, loads it
+    // as the active mission so what was just planned can be flown.
+    void savePlannedMission();
+    // Casts a ray from the free orbit camera through a window pixel into the
+    // terrain - the planning-mode equivalent of windowToImagePixel, which
+    // only ever projects through the simulated UAV camera.
+    bool pickGroundInWorldView(int x, int y, Geodetic& out) const;
+
     // --- frame -----------------------------------------------------------
     void handleEvents();
     void onKeyDown(const SDL_Keysym& key);
@@ -165,7 +193,8 @@ private:
     // --- geometry helpers ------------------------------------------------
     // The simulated camera's pane, in window pixels, y down from the top.
     glm::vec4 cameraRect() const;
-    // Width of the bottom-left readout, which the camera pane must clear.
+    // Width reserved on the left for the status panels, which the camera
+    // pane must clear.
     float answerPanelWidth() const;
     // Window pixel -> camera image pixel. Returns false when the point is
     // outside the inset.
@@ -239,6 +268,15 @@ private:
     bool have_pick_ = false;
     glm::dvec2 pick_pixel_{0.0};
     GeolocateResult pick_result_;
+
+    // --- mission planning --------------------------------------------------
+    bool planning_mode_ = false;
+    // Waypoints placed so far, in click order. Reuses Waypoint directly
+    // (frame always global_relative_alt) rather than a separate planner
+    // type, since this is exactly what gets written to the .plan and - once
+    // saved - flown.
+    std::vector<Waypoint> planned_items_;
+    static constexpr double kPlannedAltitudeAglM = 50.0;
 
     // --- interaction -----------------------------------------------------
     bool paused_ = false;

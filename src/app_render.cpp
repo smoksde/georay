@@ -82,6 +82,22 @@ void App::renderWorldView() {
     if (has_mission_ && flight_.hasMission()) {
         scene_->addMissionRoute(flight_.routeEnu(), flight_.currentLeg(), *terrain_);
     }
+    if (!planned_items_.empty()) {
+        // Flight-altitude ENU for each point, resampled from the terrain
+        // fresh every frame - robust to a re-anchor moving the frame under
+        // the plan, the same way resolveAltitude's terrain-relative case
+        // works. -1 as the current leg: nothing is flying this route yet, so
+        // no leg should be highlighted.
+        std::vector<glm::dvec3> planned_route_enu;
+        planned_route_enu.reserve(planned_items_.size());
+        for (const Waypoint& item : planned_items_) {
+            const glm::dvec3 xy = frame_.fromGeodetic(
+                Geodetic(item.latitude_deg, item.longitude_deg, frame_.origin().altitude_m));
+            const double ground_z = terrain_->sampleHeight(xy.x, xy.y);
+            planned_route_enu.push_back(glm::dvec3(xy.x, xy.y, ground_z + item.altitude_m));
+        }
+        scene_->addMissionRoute(planned_route_enu, -1, *terrain_);
+    }
     scene_->addAircraft(uav_, frame_, *terrain_, 28.0 * glyph);
     // The frustum is edges only. Filling its volume was tried and dropped:
     // two of the four side faces are always near edge-on, so they read as
@@ -253,6 +269,8 @@ void App::renderHud() {
         const float w = column_w;
         float rows = 6.0f;
         const bool show_mission = has_mission_ && (rows += 2.0f, true);
+        const bool show_planning =
+            (planning_mode_ || !planned_items_.empty()) && (rows += 1.0f, true);
         const float h = rows * line_h + 2.0f * pad;
         panel(pad, column_y, w, h);
         Cursor c{text, pad * 2.0f, column_y + pad, s, line_h};
@@ -274,6 +292,11 @@ void App::renderHud() {
                                    std::to_string(waypoints) + "  " +
                                    num(flight_.routeLength() / 1000.0, 2) + " KM",
                   colours::text_value);
+        }
+        if (show_planning) {
+            c.row("PLANNING", (planning_mode_ ? std::string("ON - ") : std::string("OFF - ")) +
+                                  std::to_string(planned_items_.size()) + " WPT",
+                  planning_mode_ ? colours::text_good : colours::text_dim);
         }
         column_y += h + pad;
     }
@@ -382,6 +405,14 @@ void App::renderHud() {
             "N                    DARK GROUND",
             "R                    RESET",
             "F12                  SCREENSHOT",
+            "",
+            "L                    PLANNING MODE",
+            "LMB IN 3D VIEW        (PLANNING) ADD WAYPOINT",
+            "Z                    UNDO LAST WAYPOINT",
+            "C                    CLEAR PLAN",
+            "X                    ADD LANDING AT HOME",
+            "S                    SAVE PLAN AND FLY IT",
+            "",
             "Q / ESC              QUIT",
         };
         const int rows = int(sizeof(keys) / sizeof(keys[0]));

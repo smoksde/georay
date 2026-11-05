@@ -38,6 +38,7 @@ void testMercator();
 void testFloatingOrigin();
 void testJson();
 void testMission();
+void testWriteQgcPlan();
 
 int runSelfTest() {
     resetCheckCounts();
@@ -62,6 +63,7 @@ int runSelfTest() {
     testFloatingOrigin();
     testJson();
     testMission();
+    testWriteQgcPlan();
 
     std::printf("\n%d checks, %d failures\n", checksRun(), failuresFound());
     return failuresFound() == 0 ? 0 : 1;
