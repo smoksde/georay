@@ -16,19 +16,17 @@ namespace {
 
 glm::vec3 toFloat(const glm::dvec3& v) { return glm::vec3(float(v.x), float(v.y), float(v.z)); }
 
-// Fixed-decimal formatting. std::to_string always gives six decimals and
-// std::ostringstream needs three lines per number; this is one call, and the
-// HUD is nothing but numbers.
+// Fixed-decimal formatting in one call, where std::to_string always gives
+// six decimals and std::ostringstream needs three lines per number.
 std::string num(double value, int decimals) {
     char buffer[64];
     std::snprintf(buffer, sizeof(buffer), "%.*f", decimals, value);
     return buffer;
 }
 
-// Latitude and longitude with a hemisphere letter rather than a sign. Six
-// decimal places is about 11 cm at the equator - one more digit than this
-// tool can justify, and one fewer would round away differences it is
-// supposed to show.
+// A hemisphere letter rather than a sign. Six decimal places is ~11 cm at
+// the equator - one more digit than this tool can justify, one fewer and it
+// would round away differences it's meant to show.
 std::string formatLatitude(double deg) {
     return num(std::fabs(deg), 6) + "^ " + (deg >= 0.0 ? "N" : "S");
 }

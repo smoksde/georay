@@ -57,13 +57,11 @@ void printUsage() {
         "  georay --help                 this message\n";
 }
 
-// Whether a scene's data files are actually on disk. Used to decide if the
-// default scene can be opened, so a checkout that has never run a fetch
-// script still starts rather than erroring on a missing file.
+// Whether a scene's data is actually on disk, so the default scene opens
+// rather than erroring on a checkout that has never run a fetch script.
 bool dataPresent(const georay::App::Options& options) {
-    // Only elevation has to be on disk. Map tiles are optional - they come
-    // from the cache or, with --online, from the network - and a scene with
-    // terrain and no map is still a usable scene.
+    // Only elevation has to be on disk - map tiles are optional, from the
+    // cache or (with --online) the network.
     if (options.dem_directory.empty()) return true;
     // A directory with no tile covering the origin is as good as absent.
     const std::string tile =
@@ -71,9 +69,8 @@ bool dataPresent(const georay::App::Options& options) {
     return std::ifstream(options.dem_directory + "/" + tile + ".hgt").good();
 }
 
-// Parses "LAT,LON". Returns false on anything it cannot read, rather than
-// quietly defaulting - a mistyped origin that silently becomes 0,0 would put
-// the scene in the Atlantic with no explanation.
+// Parses "LAT,LON", refusing anything it can't read - a mistyped origin
+// silently defaulting to 0,0 would put the scene in the Atlantic unexplained.
 bool parseOrigin(const char* text, double& latitude, double& longitude) {
     char extra = 0;
     if (std::sscanf(text, "%lf,%lf%c", &latitude, &longitude, &extra) != 2) return false;
