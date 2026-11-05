@@ -239,14 +239,6 @@ private:
     bool have_pick_ = false;
     glm::dvec2 pick_pixel_{0.0};
     GeolocateResult pick_result_;
-    // Round-trip residual: geolocate, project the answer back, measure the
-    // distance from the original pixel. A pipeline that cannot reproduce
-    // its own input has no business reporting coordinates.
-    double pick_reprojection_px_ = 0.0;
-    // Sensitivity of the answer to pose error, by finite difference.
-    double sensitivity_tilt_m_per_deg_ = 0.0;
-    double sensitivity_yaw_m_per_deg_ = 0.0;
-    double sensitivity_alt_m_per_m_ = 0.0;
 
     // --- interaction -----------------------------------------------------
     bool paused_ = false;

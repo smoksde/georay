@@ -588,41 +588,6 @@ void App::pickPixel(const glm::dvec2& image_pixel) {
     have_pick_ = true;
     pick_pixel_ = image_pixel;
     pick_result_ = geolocatePixel(uav_, camera_, *terrain_, frame_, image_pixel);
-
-    if (!pick_result_.valid) {
-        pick_reprojection_px_ = 0.0;
-        sensitivity_tilt_m_per_deg_ = 0.0;
-        sensitivity_yaw_m_per_deg_ = 0.0;
-        sensitivity_alt_m_per_m_ = 0.0;
-        return;
-    }
-
-    const ProjectResult back = projectGeodetic(uav_, camera_, frame_, pick_result_.ground_geodetic);
-    pick_reprojection_px_ = glm::length(back.pixel - image_pixel);
-
-    // Error budget by finite difference: perturb one input, re-geolocate, and
-    // measure how far the answer moved. These are the numbers that decide
-    // whether a geolocation is worth anything - at a shallow depression angle
-    // one degree of gimbal error is tens of metres on the ground, and no
-    // amount of GPS accuracy helps.
-    auto displacement = [&](const UavState& perturbed) {
-        const GeolocateResult r =
-            geolocatePixel(perturbed, camera_, *terrain_, frame_, image_pixel);
-        if (!r.valid) return 0.0;
-        return glm::length(glm::dvec2(r.ground_enu) - glm::dvec2(pick_result_.ground_enu));
-    };
-
-    UavState perturbed = uav_;
-    perturbed.gimbal.tilt_deg += 1.0;
-    sensitivity_tilt_m_per_deg_ = displacement(perturbed);
-
-    perturbed = uav_;
-    perturbed.attitude.yaw_deg += 1.0;
-    sensitivity_yaw_m_per_deg_ = displacement(perturbed);
-
-    perturbed = uav_;
-    perturbed.position.altitude_m += 1.0;
-    sensitivity_alt_m_per_m_ = displacement(perturbed);
 }
 
 // --------------------------------------------------------------------------

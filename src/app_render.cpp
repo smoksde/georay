@@ -216,29 +216,21 @@ void App::renderHud() {
         edgeRect(x, y, w, h, colours::panel_edge);
     };
 
-    // Where the bottom-left readout begins. The left column has to stop above
-    // it: the two share an x range, and a window short enough to make them
-    // collide is not unusual - the column grew by three rows the moment
-    // streaming diagnostics were added.
-    const float answer_rows = 11.0f;
-    const float answer_top = float(height_) - (answer_rows * answer_line_h + 2.0f * pad) - pad;
-
     // A running cursor down the left column, so panels stack from whatever
     // the one above actually needed.
     float column_y = pad;
     const float column_w = 20.0f * text.advance(s) + 15.0f * text.advance(s);
 
-    // ---- platform and camera state ------------------------------------
+    // ---- platform state -------------------------------------------------
     {
         const float w = column_w;
-        const float h = 18.0f * line_h + 2.0f * pad;
+        const float h = 11.0f * line_h + 2.0f * pad;
         panel(pad, column_y, w, h);
         Cursor c{text, pad * 2.0f, column_y + pad, s, line_h};
 
         c.line("PLATFORM", colours::text_primary);
         c.row("LAT", formatLatitude(uav_.position.latitude_deg), colours::text_value);
         c.row("LON", formatLongitude(uav_.position.longitude_deg), colours::text_value);
-        c.row("ALT ELLIPS", num(uav_.position.altitude_m, 1) + " M", colours::text_value);
         // Height above ground has to be worked out entirely in ENU: the
         // terrain's heights are ENU, the geodetic altitude is above the
         // ellipsoid, and subtracting one from the other silently adds the
@@ -248,54 +240,19 @@ void App::renderHud() {
         c.row("HEIGHT AGL", num(agl, 1) + " M", colours::text_value);
         c.row("HEADING", num(uav_.attitude.yaw_deg, 1) + "^ " + compass(uav_.attitude.yaw_deg),
               colours::text_value);
-        c.row("PITCH/ROLL", num(uav_.attitude.pitch_deg, 1) + "^ / " +
-                                num(uav_.attitude.roll_deg, 1) + "^",
-              colours::text_value);
         c.blank();
         c.line("GIMBAL", colours::text_primary);
         c.row("MODE", FlightSimulator::gimbalModeName(flight_.gimbalMode()),
               colours::text_good);
-        c.row("PAN", num(uav_.gimbal.pan_deg, 2) + "^", colours::text_value);
         c.row("TILT DOWN", num(uav_.gimbal.tilt_deg, 2) + "^", colours::text_value);
-        c.blank();
-        c.line("CAMERA", colours::text_primary);
-        c.row("IMAGE", std::to_string(camera_.imageWidth()) + " X " +
-                           std::to_string(camera_.imageHeight()),
-              colours::text_value);
-        c.row("FOCAL", num(camera_.focalLengthMm(), 2) + " MM", colours::text_value);
-        c.row("FOV H/V", num(camera_.horizontalFovDeg(), 1) + "^ / " +
-                             num(camera_.verticalFovDeg(), 1) + "^",
-              colours::text_value);
-        c.row("FX FY CX CY", num(camera_.fx(), 0) + " " + num(camera_.fy(), 0) + " " +
-                                 num(camera_.cx(), 0) + " " + num(camera_.cy(), 0),
-              colours::text_dim);
         column_y += h + pad;
     }
 
     // ---- simulation state ---------------------------------------------
     {
         const float w = column_w;
-        // Budget first, content second. Everything below the base rows is a
-        // diagnostic, and a diagnostic drawn over the coordinates it is meant
-        // to qualify is worse than one that is absent.
-        const float available_rows =
-            std::max(9.0f, std::floor((answer_top - pad - column_y - 2.0f * pad) / line_h));
-
-        float rows = 9.0f;
-        auto want = [&](float n) {
-            if (rows + n > available_rows) return false;
-            rows += n;
-            return true;
-        };
-        const bool show_gaps = using_dem_ && dem_report_.posts_filled > 0 && want(1.0f);
-        const bool show_dem = using_dem_ && want(1.0f);
-        const bool show_map_rows =
-            want(2.0f);
-        const bool show_anchor = using_dem_ && want(1.0f);
-        const bool show_window = map_sources_[0] != nullptr && want(1.0f);
-        // Last, because the route it describes is already drawn in the 3D
-        // view, while the frame anchor appears nowhere else at all.
-        const bool show_mission = has_mission_ && want(3.0f);
+        float rows = 6.0f;
+        const bool show_mission = has_mission_ && (rows += 2.0f, true);
         const float h = rows * line_h + 2.0f * pad;
         panel(pad, column_y, w, h);
         Cursor c{text, pad * 2.0f, column_y + pad, s, line_h};
@@ -305,121 +262,20 @@ void App::renderHud() {
         c.row("PATTERN", FlightSimulator::patternName(flight_.pattern()), colours::text_good);
         c.row("STATE", paused_ ? "PAUSED" : "RUNNING",
               paused_ ? colours::text_warn : colours::text_good);
-        c.row("RATE", num(sim_rate_, 3) + " X", colours::text_value);
         c.row("GROUND SPEED", num(flight_.speed(), 1) + " M/S", colours::text_value);
-        c.row("ORBIT RADIUS", num(flight_.radius(), 0) + " M", colours::text_value);
         c.row("TERRAIN", terrain_->sourceName(),
               using_dem_ ? colours::text_good : colours::text_value);
-        if (show_map_rows) {
-            c.row("GROUND", groundModeName(ground_mode_), colours::text_good);
-            const GroundChunks& ground = scene_->ground();
-            c.row("DETAIL", num(ground.metresPerPixel(), 2) + " M/PX Z" +
-                                std::to_string(ground.zoom()),
-                  colours::text_value);
-        }
-        if (show_anchor) {
-            // The floating origin, made visible. Without this the frame
-            // moves silently, and a reader has no way to tell whether the
-            // coordinates they are looking at came from one anchor or six.
-            c.row("ANCHOR", num(reanchor_distance_m_, 0) + "/" +
-                                num(reanchorThreshold(), 0) + " M  " +
-                                std::to_string(reanchor_count_) + " MOVES",
-                  colours::text_dim);
-        }
-        if (show_window) {
-            // Chunk streaming, made visible. Pending chunks are ones whose
-            // tiles have not arrived yet, which is a loading state and not a
-            // fault - but it has to be distinguishable from a stall.
-            const GroundChunks& ground = scene_->ground();
-            const int pending = ground.pendingCount();
-            std::string value = std::to_string(ground.readyCount()) + "/" +
-                                std::to_string(int(ground.residentCount())) + " CHUNKS";
-            if (fetcher_) {
-                const int queued = fetcher_->pending();
-                if (queued > 0) value += "  " + std::to_string(queued) + " Q";
-            }
-            c.row("LOADED", value, pending > 0 ? colours::text_warn : colours::text_dim);
-        }
+        c.row("GROUND", groundModeName(ground_mode_), colours::text_good);
         if (show_mission) {
             c.blank();
             c.line("MISSION", colours::text_primary);
-            c.row("PLAN", mission_.name.substr(0, 22), colours::text_good);
             const size_t waypoints = mission_.navigationItems().size();
             c.row("WAYPOINTS", std::to_string(flight_.currentLeg() + 1) + " OF " +
                                    std::to_string(waypoints) + "  " +
                                    num(flight_.routeLength() / 1000.0, 2) + " KM",
                   colours::text_value);
         }
-        c.row("FPS", num(fps_, 0), colours::text_dim);
         column_y += h + pad;
-    }
-
-    // ---- the answer ----------------------------------------------------
-    //
-    // Laid out in two columns: one deep column of fifteen rows would push the
-    // panel past the camera panes, and this is the readout that has to stay
-    // on screen.
-    {
-        const float col_w = 30.0f * text.advance(answer_face);
-        const float w = answerPanelWidth();
-        const float h = answer_rows * answer_line_h + 2.0f * pad;
-        const float x = pad;
-        const float y = answer_top;
-        panel(x, y, w, h);
-
-        Cursor left{text, x + pad, y + pad, answer_face, answer_line_h};
-        const GeolocateResult& r = have_pick_ ? pick_result_ : hover_result_;
-        const bool showing_pick = have_pick_;
-        left.line(showing_pick ? "GEOLOCATION - PICKED PIXEL" : "GEOLOCATION - CURSOR",
-                  colours::text_primary);
-
-        if (!have_pick_ && !hover_valid_) {
-            left.blank();
-            left.line("MOVE THE CURSOR OVER THE SIMULATED CAMERA", colours::text_dim);
-            left.line("AND CLICK A PIXEL TO GEOLOCATE IT.", colours::text_dim);
-        } else if (!r.valid) {
-            left.blank();
-            if (r.pointed_at_sky) {
-                left.line("NO GROUND: RAY IS ABOVE THE HORIZON", colours::text_warn);
-                left.line("TILT THE GIMBAL DOWN (ARROW KEYS)", colours::text_dim);
-            } else if (r.left_coverage) {
-                left.line("NO GROUND: RAY LEFT THE TERRAIN TILE", colours::text_warn);
-                left.line("THIS IS MISSING DATA, NOT A RESULT.", colours::text_dim);
-            } else {
-                left.line("NO GROUND FOUND ALONG THE RAY", colours::text_warn);
-            }
-        } else {
-            const glm::dvec2 px = showing_pick ? pick_pixel_ : hover_pixel_;
-            left.row("PIXEL", num(px.x, 1) + " , " + num(px.y, 1), colours::text_dim);
-            left.row("LATITUDE", formatLatitude(r.ground_geodetic.latitude_deg),
-                     colours::text_value);
-            left.row("LONGITUDE", formatLongitude(r.ground_geodetic.longitude_deg),
-                     colours::text_value);
-            left.row("GROUND ELEV", num(r.ground_geodetic.altitude_m, 2) + " M",
-                     colours::text_value);
-            left.row("ENU E/N", num(r.ground_enu.x, 1) + " / " + num(r.ground_enu.y, 1),
-                     colours::text_dim);
-            left.row("SLANT RANGE", formatDistance(r.slant_range_m), colours::text_value);
-            left.row("GROUND RANGE", formatDistance(r.ground_range_m), colours::text_value);
-            left.row("DEPRESSION", num(r.depression_angle_deg, 1) + "^", colours::text_value);
-            left.row("PIXEL GSD", num(r.gsd_m * 100.0, 1) + " CM", colours::text_value);
-
-            if (showing_pick) {
-                Cursor right{text, x + pad + col_w, y + pad + answer_line_h, answer_face,
-                             answer_line_h};
-                // A round trip that does not close means the forward and
-                // inverse models disagree, and every number here is suspect.
-                const bool clean = pick_reprojection_px_ < 0.05;
-                right.row("REPROJECTION", num(pick_reprojection_px_, 4) + " PX",
-                          clean ? colours::text_good : colours::text_warn);
-                right.row("D/TILT", num(sensitivity_tilt_m_per_deg_, 1) + " M PER DEG",
-                          colours::text_value);
-                right.row("D/HEADING", num(sensitivity_yaw_m_per_deg_, 1) + " M PER DEG",
-                          colours::text_value);
-                right.row("D/ALTITUDE", num(sensitivity_alt_m_per_m_, 2) + " M PER M",
-                          colours::text_value);
-            }
-        }
     }
 
     // ---- the simulated camera's frame and reticle ----------------------
