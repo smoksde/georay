@@ -3,13 +3,12 @@
 // Flies the aircraft, so the tool is a simulation rather than a static
 // diagram.
 //
-// The reason this matters for geolocation: a stationary camera makes an
-// error in the pose chain impossible to spot, because any fixed rotation
-// still produces a plausible-looking point on the ground. Put the aircraft on
-// a known path with the gimbal locked onto a fixed target, and a wrong sign
-// anywhere in the chain shows up immediately as a geolocated point that
-// drifts, swings the wrong way, or circles the target instead of sitting on
-// it.
+// A stationary camera makes a pose-chain error impossible to spot - any
+// fixed rotation still produces a plausible-looking ground point. Put the
+// aircraft on a known path with the gimbal locked onto a fixed target, and
+// a wrong sign anywhere in the chain shows up immediately as a geolocated
+// point that drifts, swings the wrong way, or circles the target instead of
+// sitting on it.
 
 #include <string>
 
@@ -44,10 +43,10 @@ public:
     void setPattern(Pattern p) { pattern_ = p; }
     Pattern pattern() const { return pattern_; }
 
-    // The pattern's reference point, in ENU. Exposed because ENU means
-    // something different after the frame re-anchors: the caller holds the
-    // geodetic truth and puts it back, or the orbit centre quietly follows
-    // the aircraft and the flight runs away from its own scene.
+    // The pattern's reference point, in ENU. Exposed so the caller can hold
+    // the geodetic truth and restore it after a re-anchor - otherwise the
+    // orbit centre quietly follows the aircraft and the flight runs away
+    // from its own scene.
     void setCentreEnu(const glm::dvec2& centre) { centre_enu_ = centre; }
     const glm::dvec2& centreEnu() const { return centre_enu_; }
     void setGimbalMode(GimbalMode m) { gimbal_mode_ = m; }
@@ -60,19 +59,18 @@ public:
     double speed() const { return speed_mps_; }
     void setRadius(double metres);
     double radius() const { return radius_m_; }
-    // Height above the ground directly below, which is what an operator
-    // thinks in; the geodetic altitude handed to UavState is derived from it
-    // and the terrain, so the aircraft follows the relief.
+    // Height above the ground directly below, what an operator thinks in;
+    // UavState's geodetic altitude is derived from this and the terrain, so
+    // the aircraft follows the relief.
     void setHeightAboveGround(double metres);
     double heightAboveGround() const { return height_agl_m_; }
 
-    // Loads a flight plan for Pattern::Mission. The waypoints' altitudes are
-    // resolved against the terrain here, once, rather than every frame: the
-    // frame semantics need the ground model, and re-deriving them per frame
-    // would make the aircraft's altitude depend on where it currently is.
-    // `keep_progress` re-derives the route in a new frame without sending
-    // the aircraft back to waypoint one - which is what a re-anchor needs,
-    // and what a freshly loaded plan must not do.
+    // Loads a flight plan for Pattern::Mission. Waypoint altitudes are
+    // resolved against the terrain here, once, rather than every frame -
+    // re-deriving them per frame would make altitude depend on current
+    // position. `keep_progress` re-derives the route in a new frame without
+    // resetting to waypoint one, for a re-anchor (never for a freshly
+    // loaded plan).
     void setMission(const georay::Mission& mission, const Terrain& terrain,
                     const EnuFrame& frame, double geoid_separation_m,
                     bool keep_progress = false);
@@ -90,9 +88,9 @@ public:
     void update(double dt, const Terrain& terrain, const EnuFrame& frame, UavState& state);
 
 private:
-    // Attitude the pattern itself implies: a turning aircraft banks, and that
-    // bank rotates the camera. Modelling it is the difference between a toy
-    // and something whose numbers mean anything.
+    // Attitude the pattern implies: a turning aircraft banks, and that bank
+    // rotates the camera - the difference between a toy and numbers that
+    // mean anything.
     Attitude attitudeFor(const glm::dvec2& velocity_enu, double turn_rate_rad_s) const;
 
     Pattern pattern_ = Pattern::Orbit;
@@ -111,9 +109,9 @@ private:
     double leg_length_m_ = 900.0;
     double leg_spacing_m_ = 220.0;
 
-    // Mission state. The route is the navigation waypoints in ENU with their
-    // altitudes already resolved; the aircraft walks along it at the
-    // commanded ground speed.
+    // Mission state: the route is the navigation waypoints in ENU with
+    // altitudes already resolved; the aircraft walks it at the commanded
+    // ground speed.
     georay::Mission mission_;
     std::vector<glm::dvec3> route_;
     std::vector<double> leg_start_m_;  // cumulative distance at each waypoint
